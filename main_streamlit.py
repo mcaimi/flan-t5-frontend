@@ -1,8 +1,13 @@
-import streamlit as st
-import requests
-import json
-import time
-from datetime import datetime
+try:
+    import streamlit as st
+    import requests
+    import json
+    import time
+    import os
+    from datetime import datetime
+except ImportError:
+    print("Error importing streamlit, requests, json, time, or datetime")
+    exit(1)
 
 # Import from libs modules
 try:
@@ -20,6 +25,12 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# load endpoint address from environment variable
+endpoint_address = os.getenv("KSERVE_ENDPOINT_ADDRESS", "http://localhost:8080")
+
+# load model name from environment variable
+model_name = os.getenv("MODEL_NAME", None)
+
 # Initialize session state
 if "request_history" not in st.session_state:
     st.session_state.request_history = []
@@ -31,10 +42,10 @@ if "available_models" not in st.session_state:
     st.session_state.available_models = []
 
 if "selected_model" not in st.session_state:
-    st.session_state.selected_model = None
+    st.session_state.selected_model = model_name
 
 if "base_url" not in st.session_state:
-    st.session_state.base_url = "http://localhost:8080"
+    st.session_state.base_url = endpoint_address
 
 if "selected_task" not in st.session_state:
     st.session_state.selected_task = "all"
@@ -57,7 +68,7 @@ st.sidebar.header("⚙️ Configuration")
 base_url = st.sidebar.text_input(
     "Base Server URL",
     value=st.session_state.base_url,
-    help="Base URL of the KServe inference server (e.g., http://localhost:8080)",
+    help="Base URL of the KServe inference server (environment variable: KSERVE_ENDPOINT_ADDRESS)",
     key="base_url_input"
 )
 
@@ -120,8 +131,13 @@ if st.session_state.available_models:
         **Protocol:** KServe v2
         """)
 else:
-    st.sidebar.info("👆 Click 'Discover Models' to fetch available models")
-    endpoint_url = None
+    st.sidebar.info(f"Using {st.session_state.selected_model} as the default model. 👆 Click 'Discover Models' to fetch available models")
+    if st.session_state.selected_model is not None:
+        print(f"Using model name from environment variable: {st.session_state.selected_model}")
+        endpoint_url = f"{base_url.rstrip('/')}/v2/models/{st.session_state.selected_model}/infer"
+    else:
+        st.sidebar.info("👆 Click 'Discover Models' to fetch available models")
+        endpoint_url = None
 
 st.sidebar.divider()
 
