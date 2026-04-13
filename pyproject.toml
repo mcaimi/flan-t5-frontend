@@ -1,7 +1,7 @@
 [project]
 name = "flan-t5-frontend"
 version = "0.1.0"
-description = "Add your description here"
+description = "Frontend application that completes the FLAN-T5 Anonymization Demo"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
