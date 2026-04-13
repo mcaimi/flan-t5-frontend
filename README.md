@@ -65,6 +65,15 @@ Default server URL is `http://localhost:8080`. You can change this in the sideba
 
 The application automatically discovers available models from the KServe v2 discovery endpoint (`/v2/models`) and allows you to select which model to use for inference.
 
+### Deployment in containerized environments
+
+The default behaviour can be also modified via environment variables: this is useful when deploying in containerized environments (e.g. k8s)
+
+#### Available config variables:
+
+- KSERVE_ENDPOINT_ADDRESS: The address of the KServe v2 inference endpoint. Defaults to "http://localhost:8080"
+- MODEL_NAME: The selected model name. This must match the name of the deployed model in the KServe Engine. Defaults to "None" (e.g. you need to perform discovery before inference)
+
 ## Requirements
 
 - Python 3.13+
