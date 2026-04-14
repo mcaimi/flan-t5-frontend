@@ -79,3 +79,62 @@ The default behaviour can be also modified via environment variables: this is us
 - Python 3.13+
 - UV package manager
 - Access to a running KServe inference server with FLAN-T5 models
+
+## Building the image on Openshift using OCP BuildConfigs
+
+A Containerfile is provided for automated builds on OCP.
+
+1. Generate a token to access the target container registry (Optional) (e.g. a Robot Account for Quay.io)
+
+2. Create a push secret to access the target registry (Optional)
+
+```bash
+$ oc create secret docker-registry push-secret --docker-server=<SERVER URL> --docker-username=<USERNAME> --docker-password=<PASSWORD> -n <NAMESPACE>
+```
+
+3. Create a build config
+
+```yaml
+#
+# Private Git: create a Secret (basic-auth or ssh) and set spec.source.sourceSecret.
+#
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: flan-t5-frontend
+spec:
+  runPolicy: Serial
+  source:
+    type: Git
+    git:
+      uri: https://codeberg.org/mcaimi/flan-t5-frontend
+      ref: main
+    # sourceSecret:
+    #   name: git-credentials
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Containerfile
+  output:
+    to:
+      kind: DockerImage
+      name: <TARGET CONTAINER REGISTRY IMAGE URL+TAG> # fill in the required information
+    pushSecret:
+      name: push-secret # optional secret created at step 2
+```
+
+4. Run the build on OCP
+
+```bash
+$ oc apply -f buildconfig.yaml
+$ oc start-build flan-t5-frontend
+```
+
+## Depoloy on OCP
+
+```bash
+$ oc new-app -e KSERVE_ENDPOINT_ADDRESS=<KSERVE_ENDPOINT> --image=<IMAGE:TAG> --name=flan-t5-frontend
+$ oc create route edge flan-t5-frontend --service=flan-t5-frontend --port=8501-tcp
+```
+
+
