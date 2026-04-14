@@ -131,8 +131,8 @@ if st.session_state.available_models:
         **Protocol:** KServe v2
         """)
 else:
-    st.sidebar.info(f"Using {st.session_state.selected_model} as the default model. 👆 Click 'Discover Models' to fetch available models")
     if st.session_state.selected_model is not None:
+        st.sidebar.info(f"Using {st.session_state.selected_model} as the default model. 👆 Click 'Discover Models' to fetch available models")
         print(f"Using model name from environment variable: {st.session_state.selected_model}")
         endpoint_url = f"{base_url.rstrip('/')}/v2/models/{st.session_state.selected_model}/infer"
     else:
