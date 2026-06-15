@@ -16,7 +16,8 @@ try:
     from libs.apis import build_payload, fetch_available_models, add_to_history
     from libs.ui import render_text_input, display_payload_preview, display_response
     from libs.pdf_processor import anonymize_pdf, summarize_pdf
-    from libs.presidio import anonymize_pdf_with_presidio, generate_markdown_diff
+    from libs.presidio import anonymize_pdf_with_presidio
+    from libs.diff_utils import generate_anonymization_diff
 except ImportError:
     print("Error importing apis, ui, pdf_processor, or presidio")
     exit(1)
@@ -587,7 +588,12 @@ if ENABLE_PDF_ANONYMIZATION:
 
                             # Display diff
                             if original_md and anonymized_md:
-                                diff_markdown = generate_markdown_diff(original_md, anonymized_md, entities)
+                                diff_markdown = generate_anonymization_diff(
+                                    original_md,
+                                    anonymized_md,
+                                    entities,
+                                    anonymization_mode="presidio"
+                                )
                                 with st.expander("📊 Before/After Comparison", expanded=True):
                                     st.markdown(diff_markdown)
 
@@ -609,8 +615,8 @@ if ENABLE_PDF_ANONYMIZATION:
                             )
 
                     else:
-                        # KServe pipeline (existing implementation)
-                        result_pdf, summary, errors = anonymize_pdf(
+                        # KServe pipeline
+                        result_pdf, original_md, anonymized_md, summary, errors = anonymize_pdf(
                             uploaded_file,
                             st.session_state.selected_model,
                             st.session_state.base_url,
@@ -627,6 +633,17 @@ if ENABLE_PDF_ANONYMIZATION:
                                 "success",
                                 elapsed_time
                             )
+
+                            # Display diff
+                            if original_md and anonymized_md:
+                                diff_markdown = generate_anonymization_diff(
+                                    original_md,
+                                    anonymized_md,
+                                    detected_entities=None,
+                                    anonymization_mode="kserve"
+                                )
+                                with st.expander("📊 Before/After Comparison", expanded=True):
+                                    st.markdown(diff_markdown)
 
                             # Download button
                             st.download_button(

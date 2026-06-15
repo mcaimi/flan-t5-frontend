@@ -146,6 +146,9 @@ def generate_markdown_diff(
 ) -> str:
     """Generate a markdown-formatted before/after comparison.
 
+    DEPRECATED: Use libs.diff_utils.generate_anonymization_diff() instead.
+    This function is kept for backwards compatibility.
+
     Creates a markdown display showing:
     - Summary table of detected PII entity types and counts
     - Original text section
@@ -159,45 +162,13 @@ def generate_markdown_diff(
     Returns:
         Markdown-formatted string for display in Streamlit
     """
-    try:
-        diff_md = "### 🔍 PII Detection Summary\n\n"
-
-        if not detected_entities:
-            diff_md += "*No PII detected in the document.*\n\n"
-        else:
-            # Count entities by type
-            entity_counts = {}
-            for entity in detected_entities:
-                entity_type = entity['entity_type']
-                entity_counts[entity_type] = entity_counts.get(entity_type, 0) + 1
-
-            # Create summary table
-            diff_md += "| Entity Type | Count |\n"
-            diff_md += "|------------|-------|\n"
-            for entity_type, count in sorted(entity_counts.items()):
-                diff_md += f"| {entity_type} | {count} |\n"
-            diff_md += "\n"
-
-        # Original text section
-        diff_md += "### 📄 Original Text\n\n"
-        diff_md += "```\n"
-        diff_md += original[:2000]  # Limit to first 2000 chars for display
-        if len(original) > 2000:
-            diff_md += "\n... (truncated for display)"
-        diff_md += "\n```\n\n"
-
-        # Anonymized text section
-        diff_md += "### 🔒 Anonymized Text\n\n"
-        diff_md += "```\n"
-        diff_md += anonymized[:2000]  # Limit to first 2000 chars for display
-        if len(anonymized) > 2000:
-            diff_md += "\n... (truncated for display)"
-        diff_md += "\n```\n\n"
-
-        return diff_md
-
-    except Exception as e:
-        return f"Error generating diff: {str(e)}"
+    from libs.diff_utils import generate_anonymization_diff
+    return generate_anonymization_diff(
+        original,
+        anonymized,
+        detected_entities,
+        anonymization_mode="presidio"
+    )
 
 
 def anonymize_pdf_with_presidio(
