@@ -1,24 +1,28 @@
 # FLAN-T5 Frontend
 
-This repository contains a Streamlit frontend implementation for interacting with an inference pipeline that processes text for anonymization, translation, and summarization tasks using FLAN-T5 models served through KServe.
+This repository contains a Streamlit application for interacting with a KServe-based inference pipeline that processes text and PDF documents for anonymization, translation, and summarization tasks using configurable models.
 
 ## Features
 
 - 🤖 Interactive web interface for FLAN-T5 model inference
-- 🔒 Anonymization: Replaces personal information in text with placeholders
-- 🌐 Translation: Translates text to another language
-- 📄 Summarization: Creates concise summaries of long text
+- 📄 **PDF Anonymization**: Upload PDFs, extract text with docling, anonymize sentences, and download anonymized PDF (default mode)
+- 📝 **PDF Summarization**: Upload PDFs, extract text with docling, generate AI-powered summaries, and download as PDF or TXT
+- 🔒 **Sentence Anonymization** (optional): Single-sentence anonymization for quick text processing
+- 🌐 Translation: Translates text to another language (optional mode)
+- 📊 Summarization: Creates concise summaries of long text (optional mode)
 - 🔄 Support for individual or batch processing of all tasks
-- 📊 Real-time payload preview and response visualization
+- 📈 Real-time payload preview and response visualization
 - 📜 Request history tracking
 - 🔍 Automatic model discovery from KServe endpoints
-- 💾 Response download capability
+- 💾 Response download capability (JSON and PDF)
 
 ## Files
 
 - `main_streamlit.py`: Main Streamlit application entry point
+- `config.yaml`: Feature flag configuration file
 - `libs/apis.py`: API-related functions for KServe v2 inference endpoints
 - `libs/ui.py`: UI widget components for the Streamlit application
+- `libs/pdf_processor.py`: PDF processing module using docling for text extraction and anonymization
 - `pyproject.toml`: Project dependencies and metadata (UV-managed)
 
 ## Installation
@@ -36,10 +40,61 @@ Start the Streamlit application:
 uv run streamlit run main_streamlit.py
 ```
 
-Or run directly with Python:
-```bash
-uv run python main_streamlit.py
+The available features are controlled by the `config.yaml` file in the project root.
+
+## Configuration
+
+The application uses `config.yaml` to enable/disable features:
+
+```yaml
+features:
+  text_anonymization: false  # Enable sentence-level text anonymization tab
+  pdf_anonymization: true    # Enable PDF document anonymization tab
+  pdf_summarization: true    # Enable PDF document summarization tab
 ```
+
+### Feature Flags
+
+- **`text_anonymization`**: When `true`, shows the Text Anonymization interface with support for single-sentence anonymization, translation, and summarization tasks.
+- **`pdf_anonymization`**: When `true`, shows the PDF Anonymization interface for uploading and processing PDF documents.
+- **`pdf_summarization`**: When `true`, shows the PDF Summarization interface for uploading PDFs and generating AI-powered summaries.
+
+### Feature Combinations
+
+The application dynamically creates tabs based on enabled features. You can enable any combination:
+
+1. **Single Feature** (shows single container, no tabs):
+   ```yaml
+   features:
+     text_anonymization: false
+     pdf_anonymization: true
+     pdf_summarization: false
+   ```
+
+2. **Two Features** (shows two tabs):
+   ```yaml
+   features:
+     text_anonymization: false
+     pdf_anonymization: true
+     pdf_summarization: true
+   ```
+
+3. **All Features** (shows three tabs):
+   ```yaml
+   features:
+     text_anonymization: true
+     pdf_anonymization: true
+     pdf_summarization: true
+   ```
+
+4. **No Features**:
+   ```yaml
+   features:
+     text_anonymization: false
+     pdf_anonymization: false
+     pdf_summarization: false
+   ```
+   Displays a courtesy message: "There are no features enabled for this instance"
 
 ## Application Interface
 
@@ -52,6 +107,8 @@ The Streamlit application provides a comprehensive web interface with:
 - Clear history functionality
 
 ### Main Interface
+
+**Text Anonymization Tab** (when `text_anonymization: true`):
 - Task selection (Anonymize, Translate, Summarize, or All tasks)
 - Dedicated text input areas for each task with character counting
 - Live payload preview showing the exact JSON sent to the inference endpoint
@@ -59,13 +116,32 @@ The Streamlit application provides a comprehensive web interface with:
 - Response visualization with metrics (status code, response time, size)
 - Downloadable response data
 
-## Configuration
+**PDF Anonymization Tab** (when `pdf_anonymization: true`):
+- PDF file upload (max 10MB)
+- Automatic text extraction using docling
+- Sentence-level anonymization via AI model
+- Progress tracking with real-time status
+- Download anonymized PDF
+- Error reporting for failed sentences
+
+**PDF Summarization Tab** (when `pdf_summarization: true`):
+- PDF file upload (max 10MB)
+- Automatic text extraction using docling
+- AI-powered document summarization
+- Progress tracking with real-time status
+- Summary display in text area
+- Download summary as PDF or TXT format
+- Error reporting and detailed status messages
+
+## Runtime Configuration
+
+### KServe Endpoint Configuration
 
 Default server URL is `http://localhost:8080`. You can change this in the sidebar configuration panel.
 
 The application automatically discovers available models from the KServe v2 discovery endpoint (`/v2/models`) and allows you to select which model to use for inference.
 
-### Deployment in containerized environments
+### Deployment in Containerized Environments
 
 The default behaviour can be also modified via environment variables: this is useful when deploying in containerized environments (e.g. k8s)
 
@@ -78,7 +154,13 @@ The default behaviour can be also modified via environment variables: this is us
 
 - Python 3.13+
 - UV package manager
-- Access to a running KServe inference server with FLAN-T5 models
+- Access to a running KServe inference server with FLAN-T5 anonymization models
+- Dependencies:
+  - streamlit>=1.56.0
+  - requests>=2.33.1
+  - docling>=2.0.0 (for PDF text extraction)
+  - pypdf>=5.1.0 (for PDF manipulation)
+  - reportlab>=4.2.0 (for PDF generation)
 
 ## Building the image on Openshift using OCP BuildConfigs
 
@@ -130,7 +212,7 @@ $ oc apply -f buildconfig.yaml
 $ oc start-build flan-t5-frontend
 ```
 
-## Depoloy on OCP
+## Deploy on OCP
 
 ```bash
 $ oc new-app -e KSERVE_ENDPOINT_ADDRESS=<KSERVE_ENDPOINT> --image=<IMAGE:TAG> --name=flan-t5-frontend
