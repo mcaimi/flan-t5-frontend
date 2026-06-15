@@ -1,0 +1,17 @@
+# Feature flags for the Streamlit application
+#
+# text_anonymization: Enable/disable sentence-level text anonymization interface
+#                     (includes anonymize, translate, and summarize tasks)
+#
+# pdf_anonymization: Enable/disable PDF document anonymization interface
+#                    (uses docling for text extraction and preserves layout)
+#
+# pdf_summarization: Enable/disable PDF document summarization interface
+#                    (uses docling to convert PDF to markdown, then AI model to summarize)
+#
+# If all are false, the application will show a courtesy message.
+
+features:
+  text_anonymization: false
+  pdf_anonymization: true
+  pdf_summarization: true
