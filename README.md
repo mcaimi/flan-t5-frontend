@@ -5,16 +5,15 @@ This repository contains a Streamlit application for interacting with a KServe-b
 ## Features
 
 - 🤖 Interactive web interface for FLAN-T5 model inference
-- 📄 **PDF Anonymization**: Upload PDFs, extract text with docling, anonymize sentences, and download anonymized PDF (default mode)
-- 📝 **PDF Summarization**: Upload PDFs, extract text with docling, generate AI-powered summaries, and download as PDF or TXT
-- 🔒 **Sentence Anonymization** (optional): Single-sentence anonymization for quick text processing
-- 🌐 Translation: Translates text to another language (optional mode)
-- 📊 Summarization: Creates concise summaries of long text (optional mode)
+- 📄 **PDF Anonymization**: Upload PDFs, extract text with docling, split into sentences using NLTK, anonymize each sentence, and download anonymized PDF (default mode)
+- 📝 **PDF Summarization**: Upload PDFs, extract text with docling, split into sentences using NLTK, summarize each sentence, and download as PDF or TXT
+- 🔒 **Text Anonymization** (optional): Single-sentence anonymization, translation, and summarization for quick text processing
 - 🔄 Support for individual or batch processing of all tasks
 - 📈 Real-time payload preview and response visualization
 - 📜 Request history tracking
 - 🔍 Automatic model discovery from KServe endpoints
 - 💾 Response download capability (JSON and PDF)
+- 🧠 **NLTK-based sentence splitting** for improved sentence boundary detection
 
 ## Files
 
@@ -22,7 +21,7 @@ This repository contains a Streamlit application for interacting with a KServe-b
 - `config.yaml`: Feature flag configuration file
 - `libs/apis.py`: API-related functions for KServe v2 inference endpoints
 - `libs/ui.py`: UI widget components for the Streamlit application
-- `libs/pdf_processor.py`: PDF processing module using docling for text extraction and anonymization
+- `libs/pdf_processor.py`: PDF processing module using docling for text extraction, NLTK for sentence splitting, and KServe API for anonymization and summarization
 - `pyproject.toml`: Project dependencies and metadata (UV-managed)
 
 ## Installation
@@ -119,7 +118,8 @@ The Streamlit application provides a comprehensive web interface with:
 **PDF Anonymization Tab** (when `pdf_anonymization: true`):
 - PDF file upload (max 10MB)
 - Automatic text extraction using docling
-- Sentence-level anonymization via AI model
+- Intelligent sentence splitting using NLTK
+- Sentence-by-sentence anonymization via AI model
 - Progress tracking with real-time status
 - Download anonymized PDF
 - Error reporting for failed sentences
@@ -127,11 +127,36 @@ The Streamlit application provides a comprehensive web interface with:
 **PDF Summarization Tab** (when `pdf_summarization: true`):
 - PDF file upload (max 10MB)
 - Automatic text extraction using docling
-- AI-powered document summarization
+- Intelligent sentence splitting using NLTK
+- Sentence-by-sentence summarization via AI model
 - Progress tracking with real-time status
 - Summary display in text area
 - Download summary as PDF or TXT format
 - Error reporting and detailed status messages
+
+## PDF Processing Pipeline
+
+Both PDF anonymization and summarization use a unified processing pipeline:
+
+1. **PDF → Markdown**: Extract text content using docling
+2. **Markdown → Sentences**: Split text into sentences using NLTK's punkt tokenizer
+3. **Process Sentences**: Each sentence is sent to the KServe AI model (anonymize or summarize)
+4. **Sentences → Markdown**: Rebuild the document from processed sentences
+5. **Markdown → PDF**: Convert back to PDF using reportlab
+
+### Key Technologies
+
+- **docling**: High-quality PDF text extraction that preserves document structure
+- **NLTK**: Advanced sentence tokenization that handles edge cases (abbreviations, decimals, etc.) better than regex-based approaches
+- **KServe v2 API**: Scalable inference endpoint for processing individual sentences
+- **reportlab**: PDF generation from processed text
+
+### Benefits of Sentence-Level Processing
+
+- **Better quality**: Each sentence is processed independently for more accurate results
+- **Progress tracking**: Real-time feedback on which sentence is being processed
+- **Error resilience**: Failed sentences don't block the entire document
+- **Detailed reporting**: Know exactly which sentences succeeded or failed
 
 ## Runtime Configuration
 
@@ -154,13 +179,14 @@ The default behaviour can be also modified via environment variables: this is us
 
 - Python 3.13+
 - UV package manager
-- Access to a running KServe inference server with FLAN-T5 anonymization models
+- Access to a running KServe inference server with FLAN-T5 models
 - Dependencies:
   - streamlit>=1.56.0
   - requests>=2.33.1
   - docling>=2.0.0 (for PDF text extraction)
   - pypdf>=5.1.0 (for PDF manipulation)
   - reportlab>=4.2.0 (for PDF generation)
+  - nltk>=3.8.0 (for sentence tokenization)
 
 ## Building the image on Openshift using OCP BuildConfigs
 

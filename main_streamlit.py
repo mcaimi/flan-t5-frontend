@@ -15,10 +15,23 @@ except ImportError:
 try:
     from libs.apis import build_payload, fetch_available_models, add_to_history
     from libs.ui import render_text_input, display_payload_preview, display_response
-    from libs.pdf_processor import process_pdf, summarize_pdf
+    from libs.pdf_processor import anonymize_pdf, summarize_pdf
 except ImportError:
     print("Error importing apis, ui, or pdf_processor")
     exit(1)
+
+# Ensure NLTK punkt tokenizer is available at startup
+try:
+    import nltk
+    try:
+        nltk.data.find('tokenizers/punkt_tab')
+    except LookupError:
+        print("Downloading NLTK punkt_tab tokenizer...")
+        nltk.download('punkt_tab', quiet=False)
+        print("NLTK punkt_tab tokenizer downloaded successfully")
+except Exception as e:
+    print(f"Warning: Could not verify NLTK punkt tokenizer: {e}")
+    # Continue anyway - will be checked again in pdf_processor if needed
 
 # Load feature flags from config.yaml
 def load_config():
@@ -488,7 +501,7 @@ if ENABLE_PDF_ANONYMIZATION:
                     status_text.text(msg)
 
                 try:
-                    result_pdf, summary, errors = process_pdf(
+                    result_pdf, summary, errors = anonymize_pdf(
                         uploaded_file,
                         st.session_state.selected_model,
                         st.session_state.base_url,
