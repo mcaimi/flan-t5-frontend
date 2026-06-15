@@ -10,12 +10,13 @@ WORKDIR /projects
 COPY . .
 
 # Install any dependencies
-RUN \
-  if [ -f requirements.txt ]; \
-    then pip install -r requirements.txt; \
+RUN if [ -f requirements.txt ]; \
+    then pip install --no-cache-dir -r requirements.txt; \
   elif [ `ls -1q *.txt | wc -l` == 1 ]; \
-    then pip install -r *.txt; \
+    then pip install --no-cache-dir -r *.txt; \
   fi
+
+ENV PYTHONWARNINGS="ignore::FutureWarning:transformers"
 
 # Specify the command to run on container start
 ENTRYPOINT ["python", "-m", "streamlit", "run", "main_streamlit.py"]

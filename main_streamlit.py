@@ -4,18 +4,42 @@ try:
     import json
     import time
     import os
+    import yaml
     from datetime import datetime
+    from pathlib import Path
 except ImportError:
-    print("Error importing streamlit, requests, json, time, or datetime")
+    print("Error importing streamlit, requests, json, time, yaml, or datetime")
     exit(1)
 
 # Import from libs modules
 try:
     from libs.apis import build_payload, fetch_available_models, add_to_history
     from libs.ui import render_text_input, display_payload_preview, display_response
+    from libs.pdf_processor import process_pdf, summarize_pdf
 except ImportError:
-    print("Error importing apis or ui")
+    print("Error importing apis, ui, or pdf_processor")
     exit(1)
+
+# Load feature flags from config.yaml
+def load_config():
+    """Load configuration from config.yaml file."""
+    config_path = Path(__file__).parent / "config.yaml"
+    try:
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+            return config.get('features', {})
+    except FileNotFoundError:
+        st.error("❌ config.yaml file not found. Please create it with feature flags.")
+        st.stop()
+    except Exception as e:
+        st.error(f"❌ Error loading config.yaml: {str(e)}")
+        st.stop()
+
+# Load feature flags
+features = load_config()
+ENABLE_TEXT_ANONYMIZATION = features.get('text_anonymization', False)
+ENABLE_PDF_ANONYMIZATION = features.get('pdf_anonymization', False)
+ENABLE_PDF_SUMMARIZATION = features.get('pdf_summarization', False)
 
 # Page configuration
 st.set_page_config(
@@ -56,6 +80,18 @@ DEFAULT_TEXTS = {
     "translate": "Translate this text to another language",
     "summarize": "Why KServe? KServe eliminates the complexity of productionizing AI models. Whether you're a data scientist wanting to deploy your latest LLM experiment, a DevOps engineer building scalable ML infrastructure, or a decision maker evaluating AI platforms, KServe provides a unified solution that works across clouds and scales with your needs. From Experiment to Production in Minutes - Deploy GenAI services and ML models with simple YAML configurations, no complex infrastructure setup required. Cloud-Agnostic by Design - Run anywhere: AWS, Azure, GCP, on-premises, or hybrid environments with consistent behavior. Enterprise-Scale Ready - Automatically handle traffic spikes, scale to zero when idle, and manage hundreds of models efficiently."
 }
+
+# Check if any features are enabled
+if not ENABLE_TEXT_ANONYMIZATION and not ENABLE_PDF_ANONYMIZATION and not ENABLE_PDF_SUMMARIZATION:
+    st.title("🤖 Inference Pipeline Client")
+    st.info("ℹ️ There are no features enabled for this instance")
+    st.markdown("""
+    Please check your `config.yaml` file and enable at least one feature:
+    - `text_anonymization`: Enable sentence-level text anonymization
+    - `pdf_anonymization`: Enable PDF document anonymization
+    - `pdf_summarization`: Enable PDF document summarization
+    """)
+    st.stop()
 
 # App Header
 st.title("🤖 Inference Pipeline Client")
@@ -161,182 +197,506 @@ if st.session_state.request_history:
         st.session_state.request_history = []
         st.rerun()
 
-# Main Content Area - Two Column Layout
-left_col, right_col = st.columns([3, 2], gap="large")
+# Main Content Area - Conditionally show tabs based on enabled features
+enabled_features = []
+if ENABLE_TEXT_ANONYMIZATION:
+    enabled_features.append("text")
+if ENABLE_PDF_ANONYMIZATION:
+    enabled_features.append("pdf_anon")
+if ENABLE_PDF_SUMMARIZATION:
+    enabled_features.append("pdf_sum")
 
-# Left Column - Input Forms and Actions
-with left_col:
-    st.header("📝 Input Configuration")
-    
-    # Task selector
-    selected_task = st.radio(
-        "Select Task",
-        options=["all", "anonymize", "translate", "summarize"],
-        format_func=lambda x: {
-            "all": "🔄 All Tasks",
-            "anonymize": "🔒 Anonymize",
-            "translate": "🌐 Translate",
-            "summarize": "📄 Summarize"
-        }[x],
-        horizontal=True,
-        key="task_selector"
-    )
-    
-    st.divider()
-    
-    texts_dict = {}
-    
-    # Display inputs based on selected task
-    if selected_task == "all":
-        st.markdown("### Configure all tasks at once")
-        texts_dict["anonymize"] = render_text_input(
-            "Anonymize Text",
-            DEFAULT_TEXTS["anonymize"],
-            "anonymize_all",
-            height=100,
-            icon="🔒"
-        )
-        texts_dict["translate"] = render_text_input(
-            "Translate Text",
-            DEFAULT_TEXTS["translate"],
-            "translate_all",
-            height=100,
-            icon="🌐"
-        )
-        texts_dict["summarize"] = render_text_input(
-            "Summarize Text",
-            DEFAULT_TEXTS["summarize"],
-            "summarize_all",
-            height=150,
-            icon="📄"
-        )
-    
-    elif selected_task == "anonymize":
-        st.markdown("### 🔒 Anonymize Personal Information")
-        st.info("This task replaces personal information (names, addresses) with placeholders")
-        texts_dict["anonymize"] = render_text_input(
-            "Text to Anonymize",
-            DEFAULT_TEXTS["anonymize"],
-            "anonymize_single",
-            height=150
-        )
-    
-    elif selected_task == "translate":
-        st.markdown("### 🌐 Translate Text")
-        st.info("This task translates text to another language")
-        texts_dict["translate"] = render_text_input(
-            "Text to Translate",
-            DEFAULT_TEXTS["translate"],
-            "translate_single",
-            height=150
-        )
-    
-    elif selected_task == "summarize":
-        st.markdown("### 📄 Summarize Long Text")
-        st.info("This task creates a concise summary of longer text")
-        texts_dict["summarize"] = render_text_input(
-            "Text to Summarize",
-            DEFAULT_TEXTS["summarize"],
-            "summarize_single",
-            height=200
-        )
-    
-    current_task = selected_task
-    
-    st.divider()
-    
-    # Send Request Button
-    col_btn1, col_btn2 = st.columns([3, 1])
-    with col_btn1:
-        send_button = st.button("🚀 Send Request", type="primary", use_container_width=True)
-    with col_btn2:
-        if st.button("🔄 Reset", use_container_width=True):
-            st.rerun()
-    
-    # Handle Request
-    if send_button:
-        if not endpoint_url:
-            st.error("⚠️ Please discover models and select one before sending a request")
-            st.info("💡 Use the sidebar to enter your base URL and click 'Discover Models'")
-            st.stop()
-        
-        payload = build_payload(current_task, texts_dict)
-        
-        if not payload.get("inputs"):
-            st.warning("⚠️ Please enter text for at least one task")
-        else:
-            with st.spinner("🔄 Sending request to inference pipeline..."):
-                start_time = time.time()
-                try:
-                    headers = {"Content-Type": "application/json"}
-                    response = requests.post(endpoint_url, headers=headers, json=payload, timeout=30)
-                    elapsed_time = time.time() - start_time
-                    
-                    response.raise_for_status()
-                    response_data = response.json()
-                    
-                    st.session_state.last_response = {
-                        "data": response_data,
-                        "elapsed_time": elapsed_time,
-                        "status_code": response.status_code
-                    }
-                    
-                    add_to_history(endpoint_url, current_task, "success", elapsed_time)
-                    
-                    st.success("✅ Request successful!")
-                    display_response(response_data, elapsed_time, response.status_code)
-                    
-                except requests.exceptions.Timeout:
-                    elapsed_time = time.time() - start_time
-                    add_to_history(endpoint_url, current_task, "error", elapsed_time)
-                    st.error("⏱️ Request timeout - the server took too long to respond")
-                    
-                except requests.exceptions.ConnectionError:
-                    elapsed_time = time.time() - start_time
-                    add_to_history(endpoint_url, current_task, "error", elapsed_time)
-                    st.error(f"🔌 Connection error - cannot reach {endpoint_url}")
-                    st.info("💡 Make sure the inference service is running and accessible")
-                    
-                except requests.exceptions.HTTPError as e:
-                    elapsed_time = time.time() - start_time
-                    add_to_history(endpoint_url, current_task, "error", elapsed_time)
-                    st.error(f"❌ HTTP Error {response.status_code}: {str(e)}")
-                    if response.text:
-                        with st.expander("📄 Error Details"):
-                            st.code(response.text)
-                    
-                except Exception as e:
-                    elapsed_time = time.time() - start_time
-                    add_to_history(endpoint_url, current_task, "error", elapsed_time)
-                    st.error(f"❌ Unexpected error: {str(e)}")
-    
-    # Display last successful response if exists
-    if st.session_state.last_response and not send_button:
-        with st.expander("📨 Last Response", expanded=False):
-            display_response(
-                st.session_state.last_response["data"],
-                st.session_state.last_response["elapsed_time"],
-                st.session_state.last_response["status_code"]
+# Initialize containers
+text_container = None
+pdf_container = None
+pdf_summary_container = None
+
+if len(enabled_features) == 0:
+    st.error("No features enabled")
+elif len(enabled_features) == 1:
+    # Single feature - no tabs needed
+    if ENABLE_TEXT_ANONYMIZATION:
+        text_container = st.container()
+    elif ENABLE_PDF_ANONYMIZATION:
+        pdf_container = st.container()
+    elif ENABLE_PDF_SUMMARIZATION:
+        pdf_summary_container = st.container()
+elif len(enabled_features) == 2:
+    # Two features - show two tabs
+    tab_labels = []
+    if ENABLE_TEXT_ANONYMIZATION:
+        tab_labels.append("💬 Text Anonymization")
+    if ENABLE_PDF_ANONYMIZATION:
+        tab_labels.append("📄 PDF Anonymization")
+    if ENABLE_PDF_SUMMARIZATION:
+        tab_labels.append("📝 PDF Summarization")
+
+    tab1, tab2 = st.tabs(tab_labels)
+
+    # Assign containers based on which features are enabled
+    tab_idx = 0
+    if ENABLE_TEXT_ANONYMIZATION:
+        text_container = tab1 if tab_idx == 0 else tab2
+        tab_idx += 1
+    if ENABLE_PDF_ANONYMIZATION:
+        pdf_container = tab1 if tab_idx == 0 else tab2
+        tab_idx += 1
+    if ENABLE_PDF_SUMMARIZATION:
+        pdf_summary_container = tab1 if tab_idx == 0 else tab2
+        tab_idx += 1
+else:
+    # All three features enabled - show three tabs
+    tab1, tab2, tab3 = st.tabs([
+        "💬 Text Anonymization",
+        "📄 PDF Anonymization",
+        "📝 PDF Summarization"
+    ])
+    text_container = tab1
+    pdf_container = tab2
+    pdf_summary_container = tab3
+
+# Tab 1: Text Anonymization (only if enabled)
+if ENABLE_TEXT_ANONYMIZATION:
+    with text_container:
+        # Two Column Layout
+        left_col, right_col = st.columns([3, 2], gap="large")
+
+        # Left Column - Input Forms and Actions
+        with left_col:
+            st.header("📝 Input Configuration")
+
+            # Task selector
+            selected_task = st.radio(
+                "Select Task",
+                options=["all", "anonymize", "translate", "summarize"],
+                format_func=lambda x: {
+                    "all": "🔄 All Tasks",
+                    "anonymize": "🔒 Anonymize",
+                    "translate": "🌐 Translate",
+                    "summarize": "📄 Summarize"
+                }[x],
+                horizontal=True,
+                key="task_selector"
             )
 
-# Right Column - Live Payload Preview
-with right_col:
-    st.header("👁️ Live Preview")
-    current_payload = build_payload(current_task, texts_dict)
-    display_payload_preview(current_payload, show_metadata=True)
-    
-    st.divider()
-    
-    with st.container(border=True):
-        st.subheader("ℹ️ About")
-        st.markdown("""
-        **Available Tasks:**
-        - 🔒 **Anonymize**: Replaces personal info with placeholders
-        - 🌐 **Translate**: Converts text to another language
-        - 📄 **Summarize**: Creates concise summaries
-        
-        **Tips:**
-        - Use the radio buttons to switch between tasks
-        - Preview updates in real-time
-        - View request history in sidebar
-        """)
+            st.divider()
+
+            texts_dict = {}
+
+            # Display inputs based on selected task
+            if selected_task == "all":
+                st.markdown("### Configure all tasks at once")
+                texts_dict["anonymize"] = render_text_input(
+                    "Anonymize Text",
+                    DEFAULT_TEXTS["anonymize"],
+                    "anonymize_all",
+                    height=100,
+                    icon="🔒"
+                )
+                texts_dict["translate"] = render_text_input(
+                    "Translate Text",
+                    DEFAULT_TEXTS["translate"],
+                    "translate_all",
+                    height=100,
+                    icon="🌐"
+                )
+                texts_dict["summarize"] = render_text_input(
+                    "Summarize Text",
+                    DEFAULT_TEXTS["summarize"],
+                    "summarize_all",
+                    height=150,
+                    icon="📄"
+                )
+
+            elif selected_task == "anonymize":
+                st.markdown("### 🔒 Anonymize Personal Information")
+                st.info("This task replaces personal information (names, addresses) with placeholders")
+                texts_dict["anonymize"] = render_text_input(
+                    "Text to Anonymize",
+                    DEFAULT_TEXTS["anonymize"],
+                    "anonymize_single",
+                    height=150
+                )
+
+            elif selected_task == "translate":
+                st.markdown("### 🌐 Translate Text")
+                st.info("This task translates text to another language")
+                texts_dict["translate"] = render_text_input(
+                    "Text to Translate",
+                    DEFAULT_TEXTS["translate"],
+                    "translate_single",
+                    height=150
+                )
+
+            elif selected_task == "summarize":
+                st.markdown("### 📄 Summarize Long Text")
+                st.info("This task creates a concise summary of longer text")
+                texts_dict["summarize"] = render_text_input(
+                    "Text to Summarize",
+                    DEFAULT_TEXTS["summarize"],
+                    "summarize_single",
+                    height=200
+                )
+
+            current_task = selected_task
+
+            st.divider()
+
+            # Send Request Button
+            col_btn1, col_btn2 = st.columns([3, 1])
+            with col_btn1:
+                send_button = st.button("🚀 Send Request", type="primary", use_container_width=True)
+            with col_btn2:
+                if st.button("🔄 Reset", use_container_width=True):
+                    st.rerun()
+
+            # Handle Request
+            if send_button:
+                if not endpoint_url:
+                    st.error("⚠️ Please discover models and select one before sending a request")
+                    st.info("💡 Use the sidebar to enter your base URL and click 'Discover Models'")
+                    st.stop()
+
+                payload = build_payload(current_task, texts_dict)
+
+                if not payload.get("inputs"):
+                    st.warning("⚠️ Please enter text for at least one task")
+                else:
+                    with st.spinner("🔄 Sending request to inference pipeline..."):
+                        start_time = time.time()
+                        try:
+                            headers = {"Content-Type": "application/json"}
+                            response = requests.post(endpoint_url, headers=headers, json=payload, timeout=30)
+                            elapsed_time = time.time() - start_time
+
+                            response.raise_for_status()
+                            response_data = response.json()
+
+                            st.session_state.last_response = {
+                                "data": response_data,
+                                "elapsed_time": elapsed_time,
+                                "status_code": response.status_code
+                            }
+
+                            add_to_history(endpoint_url, current_task, "success", elapsed_time)
+
+                            st.success("✅ Request successful!")
+                            display_response(response_data, elapsed_time, response.status_code)
+
+                        except requests.exceptions.Timeout:
+                            elapsed_time = time.time() - start_time
+                            add_to_history(endpoint_url, current_task, "error", elapsed_time)
+                            st.error("⏱️ Request timeout - the server took too long to respond")
+
+                        except requests.exceptions.ConnectionError:
+                            elapsed_time = time.time() - start_time
+                            add_to_history(endpoint_url, current_task, "error", elapsed_time)
+                            st.error(f"🔌 Connection error - cannot reach {endpoint_url}")
+                            st.info("💡 Make sure the inference service is running and accessible")
+
+                        except requests.exceptions.HTTPError as e:
+                            elapsed_time = time.time() - start_time
+                            add_to_history(endpoint_url, current_task, "error", elapsed_time)
+                            st.error(f"❌ HTTP Error {response.status_code}: {str(e)}")
+                            if response.text:
+                                with st.expander("📄 Error Details"):
+                                    st.code(response.text)
+
+                        except Exception as e:
+                            elapsed_time = time.time() - start_time
+                            add_to_history(endpoint_url, current_task, "error", elapsed_time)
+                            st.error(f"❌ Unexpected error: {str(e)}")
+
+            # Display last successful response if exists
+            if st.session_state.last_response and not send_button:
+                with st.expander("📨 Last Response", expanded=False):
+                    display_response(
+                        st.session_state.last_response["data"],
+                        st.session_state.last_response["elapsed_time"],
+                        st.session_state.last_response["status_code"]
+                    )
+
+        # Right Column - Live Payload Preview
+        with right_col:
+            st.header("👁️ Live Preview")
+            current_payload = build_payload(current_task, texts_dict)
+            display_payload_preview(current_payload, show_metadata=True)
+
+            st.divider()
+
+            with st.container(border=True):
+                st.subheader("ℹ️ About")
+                st.markdown("""
+                **Available Tasks:**
+                - 🔒 **Anonymize**: Replaces personal info with placeholders
+                - 🌐 **Translate**: Converts text to another language
+                - 📄 **Summarize**: Creates concise summaries
+
+                **Tips:**
+                - Use the radio buttons to switch between tasks
+                - Preview updates in real-time
+                - View request history in sidebar
+                """)
+
+# Tab 2: PDF Anonymization (only if enabled)
+if ENABLE_PDF_ANONYMIZATION:
+    with pdf_container:
+        st.header("📄 PDF Anonymization")
+        st.markdown("Upload a PDF file to anonymize all PII while preserving the original layout")
+
+        if not st.session_state.selected_model:
+            st.warning("⚠️ Please discover and select a model from the sidebar first")
+            st.stop()
+
+        col1, col2 = st.columns([2, 1])
+
+        with col1:
+            uploaded_file = st.file_uploader(
+                "Upload PDF Document",
+                type=["pdf"],
+                accept_multiple_files=False,
+                help="Upload a PDF file (max 10MB)"
+            )
+
+            if uploaded_file:
+                file_size_mb = len(uploaded_file.getvalue()) / (1024 * 1024)
+                st.info(f"📄 **{uploaded_file.name}** ({file_size_mb:.2f} MB)")
+
+        with col2:
+            st.markdown("### Settings")
+            st.text_input(
+                "Model",
+                value=st.session_state.selected_model,
+                disabled=True,
+                help="Model selected in sidebar"
+            )
+
+        st.divider()
+
+        if uploaded_file:
+            process_button = st.button("🔒 Anonymize PDF", type="primary", use_container_width=True)
+
+            if process_button:
+                start_time = time.time()
+
+                # Progress tracking
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+
+                def update_progress(pct, msg):
+                    progress_bar.progress(pct)
+                    status_text.text(msg)
+
+                try:
+                    result_pdf, summary, errors = process_pdf(
+                        uploaded_file,
+                        st.session_state.selected_model,
+                        st.session_state.base_url,
+                        update_progress
+                    )
+
+                    elapsed_time = time.time() - start_time
+
+                    if result_pdf:
+                        st.success(f"✅ {summary}")
+                        add_to_history(
+                            f"{st.session_state.base_url}/v2/models/{st.session_state.selected_model}/infer",
+                            "pdf_anonymize",
+                            "success",
+                            elapsed_time
+                        )
+
+                        # Download button
+                        st.download_button(
+                            label="⬇️ Download Anonymized PDF",
+                            data=result_pdf,
+                            file_name=f"anonymized_{uploaded_file.name}",
+                            mime="application/pdf",
+                            use_container_width=True
+                        )
+
+                        # Show errors if any
+                        if errors:
+                            with st.expander(f"⚠️ {len(errors)} Errors During Processing", expanded=False):
+                                for error in errors:
+                                    st.text(f"• {error}")
+                    else:
+                        st.error(f"❌ {summary}")
+                        add_to_history(
+                            f"{st.session_state.base_url}/v2/models/{st.session_state.selected_model}/infer",
+                            "pdf_anonymize",
+                            "error",
+                            elapsed_time
+                        )
+
+                except Exception as e:
+                    elapsed_time = time.time() - start_time
+                    st.error(f"❌ Unexpected error: {str(e)}")
+                    add_to_history(
+                        f"{st.session_state.base_url}/v2/models/{st.session_state.selected_model}/infer",
+                        "pdf_anonymize",
+                        "error",
+                        elapsed_time
+                    )
+        else:
+            st.info("👆 Upload a PDF file to get started")
+
+            with st.container(border=True):
+                st.subheader("ℹ️ How It Works")
+                st.markdown("""
+                1. **Upload**: Select a PDF file (max 10MB)
+                2. **Convert**: PDF is converted to markdown using docling
+                3. **Split**: Markdown is split into individual sentences
+                4. **Anonymize**: Each sentence is processed through the AI model
+                5. **Rebuild**: Anonymized text is converted back to PDF
+                6. **Download**: Get your anonymized PDF
+
+                **Note**: Uses docling for high-quality PDF text extraction.
+                Processing time depends on the number of sentences in the document.
+                """)
+
+# Tab 3: PDF Summarization (only if enabled)
+if ENABLE_PDF_SUMMARIZATION:
+    with pdf_summary_container:
+        st.header("📝 PDF Summarization")
+        st.markdown("Upload a PDF file to generate an AI-powered summary")
+
+        if not st.session_state.selected_model:
+            st.warning("⚠️ Please discover and select a model from the sidebar first")
+            st.stop()
+
+        col1, col2 = st.columns([2, 1])
+
+        with col1:
+            uploaded_summary_file = st.file_uploader(
+                "Upload PDF Document",
+                type=["pdf"],
+                accept_multiple_files=False,
+                help="Upload a PDF file to summarize (max 10MB)",
+                key="pdf_summary_uploader"
+            )
+
+            if uploaded_summary_file:
+                file_size_mb = len(uploaded_summary_file.getvalue()) / (1024 * 1024)
+                st.info(f"📄 **{uploaded_summary_file.name}** ({file_size_mb:.2f} MB)")
+
+        with col2:
+            st.markdown("### Settings")
+            st.text_input(
+                "Model",
+                value=st.session_state.selected_model,
+                disabled=True,
+                help="Model selected in sidebar",
+                key="pdf_summary_model_display"
+            )
+
+        st.divider()
+
+        if uploaded_summary_file:
+            summarize_button = st.button("📝 Summarize PDF", type="primary", use_container_width=True, key="summarize_pdf_btn")
+
+            if summarize_button:
+                start_time = time.time()
+
+                # Progress tracking
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+
+                def update_progress(pct, msg):
+                    progress_bar.progress(pct)
+                    status_text.text(msg)
+
+                try:
+                    summary_text, summary_pdf, status_msg, errors = summarize_pdf(
+                        uploaded_summary_file,
+                        st.session_state.selected_model,
+                        st.session_state.base_url,
+                        update_progress
+                    )
+
+                    elapsed_time = time.time() - start_time
+
+                    if summary_text and summary_pdf:
+                        st.success(f"✅ {status_msg}")
+                        add_to_history(
+                            f"{st.session_state.base_url}/v2/models/{st.session_state.selected_model}/infer",
+                            "pdf_summarize",
+                            "success",
+                            elapsed_time
+                        )
+
+                        # Display the summary
+                        st.subheader("📄 Summary")
+                        st.text_area(
+                            "Generated Summary",
+                            value=summary_text,
+                            height=300,
+                            disabled=True,
+                            key="summary_display"
+                        )
+
+                        st.divider()
+
+                        # Download buttons
+                        col_dl1, col_dl2 = st.columns(2)
+                        with col_dl1:
+                            st.download_button(
+                                label="⬇️ Download Summary (PDF)",
+                                data=summary_pdf,
+                                file_name=f"summary_{uploaded_summary_file.name}",
+                                mime="application/pdf",
+                                use_container_width=True,
+                                key="download_summary_pdf"
+                            )
+                        with col_dl2:
+                            st.download_button(
+                                label="⬇️ Download Summary (TXT)",
+                                data=summary_text,
+                                file_name=f"summary_{uploaded_summary_file.name}.txt",
+                                mime="text/plain",
+                                use_container_width=True,
+                                key="download_summary_txt"
+                            )
+
+                        # Show errors if any
+                        if errors:
+                            with st.expander(f"⚠️ {len(errors)} Issues During Processing", expanded=False):
+                                for error in errors:
+                                    st.text(f"• {error}")
+                    else:
+                        st.error(f"❌ {status_msg}")
+                        add_to_history(
+                            f"{st.session_state.base_url}/v2/models/{st.session_state.selected_model}/infer",
+                            "pdf_summarize",
+                            "error",
+                            elapsed_time
+                        )
+                        if errors:
+                            with st.expander("📄 Error Details", expanded=False):
+                                for error in errors:
+                                    st.text(f"• {error}")
+
+                except Exception as e:
+                    elapsed_time = time.time() - start_time
+                    st.error(f"❌ Unexpected error: {str(e)}")
+                    add_to_history(
+                        f"{st.session_state.base_url}/v2/models/{st.session_state.selected_model}/infer",
+                        "pdf_summarize",
+                        "error",
+                        elapsed_time
+                    )
+        else:
+            st.info("👆 Upload a PDF file to get started")
+
+            with st.container(border=True):
+                st.subheader("ℹ️ How It Works")
+                st.markdown("""
+                1. **Upload**: Select a PDF file (max 10MB)
+                2. **Convert**: PDF is converted to markdown using docling
+                3. **Summarize**: The entire document is sent to the AI model for summarization
+                4. **Display**: The generated summary is displayed on the page
+                5. **Download**: Get your summary as PDF or plain text
+
+                **Note**: Uses docling for high-quality PDF text extraction.
+                The AI model generates a concise summary of the entire document.
+                """)
