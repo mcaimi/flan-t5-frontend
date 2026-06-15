@@ -16,8 +16,9 @@ try:
     from libs.apis import build_payload, fetch_available_models, add_to_history
     from libs.ui import render_text_input, display_payload_preview, display_response
     from libs.pdf_processor import anonymize_pdf, summarize_pdf
+    from libs.presidio import anonymize_pdf_with_presidio, generate_markdown_diff
 except ImportError:
-    print("Error importing apis, ui, or pdf_processor")
+    print("Error importing apis, ui, pdf_processor, or presidio")
     exit(1)
 
 # Ensure NLTK punkt tokenizer is available at startup
@@ -33,24 +34,49 @@ except Exception as e:
     print(f"Warning: Could not verify NLTK punkt tokenizer: {e}")
     # Continue anyway - will be checked again in pdf_processor if needed
 
-# Load feature flags from config.yaml
+# Load configuration from config.yaml
 def load_config():
     """Load configuration from config.yaml file."""
     config_path = Path(__file__).parent / "config.yaml"
     try:
         with open(config_path, 'r') as f:
             config = yaml.safe_load(f)
-            return config.get('features', {})
+            return config
     except FileNotFoundError:
-        st.error("❌ config.yaml file not found. Please create it with feature flags.")
-        st.stop()
+        print("❌ config.yaml file not found. Using default configuration.")
+        return {'features': {}, 'presidio': {}}
     except Exception as e:
-        st.error(f"❌ Error loading config.yaml: {str(e)}")
-        st.stop()
+        print(f"❌ Error loading config.yaml: {str(e)}. Using default configuration.")
+        return {'features': {}, 'presidio': {}}
 
-# Load feature flags
-features = load_config()
+# Load configuration
+config = load_config()
+features = config.get('features', {})
+presidio_config = config.get('presidio', {})
 ENABLE_TEXT_ANONYMIZATION = features.get('text_anonymization', False)
+
+# Ensure spaCy language model is available for Presidio at startup
+# Get configured spaCy model (default: en_core_web_lg)
+SPACY_MODEL = presidio_config.get('spacy_model', 'en_core_web_lg')
+
+try:
+    import spacy
+    try:
+        # Try to load the configured model to verify it exists
+        spacy.load(SPACY_MODEL)
+        print(f"spaCy {SPACY_MODEL} model is available")
+    except OSError:
+        print(f"Downloading spaCy {SPACY_MODEL} language model (this may take a few minutes)...")
+        import subprocess
+        import sys
+        subprocess.check_call([
+            sys.executable, "-m", "spacy", "download", SPACY_MODEL
+        ])
+        print(f"spaCy {SPACY_MODEL} model downloaded successfully")
+except Exception as e:
+    print(f"Warning: Could not verify spaCy language model: {e}")
+    print("Presidio PII anonymization may not work without the language model")
+    # Continue anyway - will show error in UI if Presidio is used
 ENABLE_PDF_ANONYMIZATION = features.get('pdf_anonymization', False)
 ENABLE_PDF_SUMMARIZATION = features.get('pdf_summarization', False)
 
@@ -86,6 +112,16 @@ if "base_url" not in st.session_state:
 
 if "selected_task" not in st.session_state:
     st.session_state.selected_task = "all"
+
+# Presidio session state
+if "presidio_analyzer" not in st.session_state:
+    st.session_state.presidio_analyzer = None
+
+if "presidio_anonymizer" not in st.session_state:
+    st.session_state.presidio_anonymizer = None
+
+if "presidio_initialized" not in st.session_state:
+    st.session_state.presidio_initialized = False
 
 # Default texts
 DEFAULT_TEXTS = {
@@ -477,12 +513,40 @@ if ENABLE_PDF_ANONYMIZATION:
 
         with col2:
             st.markdown("### Settings")
-            st.text_input(
-                "Model",
-                value=st.session_state.selected_model,
-                disabled=True,
-                help="Model selected in sidebar"
+
+            # Anonymization mode selector
+            anonymization_mode = st.radio(
+                "Anonymization Mode",
+                options=["presidio", "kserve"],
+                format_func=lambda x: {
+                    "presidio": "🔒 Presidio (Local PII Masking)",
+                    "kserve": "🤖 KServe (AI Model)"
+                }[x],
+                help="Choose anonymization method",
+                key="anon_mode_selector"
             )
+
+            # Show model selector only for KServe mode
+            if anonymization_mode == "kserve":
+                st.text_input(
+                    "Model",
+                    value=st.session_state.selected_model,
+                    disabled=True,
+                    help="Model selected in sidebar"
+                )
+            else:
+                # Entity type selector for Presidio
+                entity_options = st.multiselect(
+                    "PII Entity Types",
+                    options=[
+                        "PERSON", "EMAIL_ADDRESS", "PHONE_NUMBER",
+                        "CREDIT_CARD", "US_SSN", "LOCATION",
+                        "DATE_TIME", "URL", "IP_ADDRESS"
+                    ],
+                    default=["PERSON", "EMAIL_ADDRESS", "PHONE_NUMBER"],
+                    help="Select which PII types to detect and mask",
+                    key="presidio_entities"
+                )
 
         st.divider()
 
@@ -501,53 +565,98 @@ if ENABLE_PDF_ANONYMIZATION:
                     status_text.text(msg)
 
                 try:
-                    result_pdf, summary, errors = anonymize_pdf(
-                        uploaded_file,
-                        st.session_state.selected_model,
-                        st.session_state.base_url,
-                        update_progress
-                    )
-
-                    elapsed_time = time.time() - start_time
-
-                    if result_pdf:
-                        st.success(f"✅ {summary}")
-                        add_to_history(
-                            f"{st.session_state.base_url}/v2/models/{st.session_state.selected_model}/infer",
-                            "pdf_anonymize",
-                            "success",
-                            elapsed_time
+                    if anonymization_mode == "presidio":
+                        # Presidio pipeline
+                        pdf_bytes, original_md, anonymized_md, entities, error = anonymize_pdf_with_presidio(
+                            uploaded_file,
+                            entity_options if entity_options else None,
+                            update_progress,
+                            SPACY_MODEL
                         )
 
-                        # Download button
-                        st.download_button(
-                            label="⬇️ Download Anonymized PDF",
-                            data=result_pdf,
-                            file_name=f"anonymized_{uploaded_file.name}",
-                            mime="application/pdf",
-                            use_container_width=True
-                        )
+                        elapsed_time = time.time() - start_time
 
-                        # Show errors if any
-                        if errors:
-                            with st.expander(f"⚠️ {len(errors)} Errors During Processing", expanded=False):
-                                for error in errors:
-                                    st.text(f"• {error}")
+                        if pdf_bytes:
+                            st.success(f"✅ Anonymized with Presidio - Found {len(entities)} PII instances")
+                            add_to_history(
+                                "presidio_local",
+                                "pdf_anonymize_presidio",
+                                "success",
+                                elapsed_time
+                            )
+
+                            # Display diff
+                            if original_md and anonymized_md:
+                                diff_markdown = generate_markdown_diff(original_md, anonymized_md, entities)
+                                with st.expander("📊 Before/After Comparison", expanded=True):
+                                    st.markdown(diff_markdown)
+
+                            # Download button
+                            st.download_button(
+                                label="⬇️ Download Anonymized PDF",
+                                data=pdf_bytes,
+                                file_name=f"anonymized_{uploaded_file.name}",
+                                mime="application/pdf",
+                                use_container_width=True
+                            )
+                        else:
+                            st.error(f"❌ {error}")
+                            add_to_history(
+                                "presidio_local",
+                                "pdf_anonymize_presidio",
+                                "error",
+                                elapsed_time
+                            )
+
                     else:
-                        st.error(f"❌ {summary}")
-                        add_to_history(
-                            f"{st.session_state.base_url}/v2/models/{st.session_state.selected_model}/infer",
-                            "pdf_anonymize",
-                            "error",
-                            elapsed_time
+                        # KServe pipeline (existing implementation)
+                        result_pdf, summary, errors = anonymize_pdf(
+                            uploaded_file,
+                            st.session_state.selected_model,
+                            st.session_state.base_url,
+                            update_progress
                         )
+
+                        elapsed_time = time.time() - start_time
+
+                        if result_pdf:
+                            st.success(f"✅ {summary}")
+                            add_to_history(
+                                f"{st.session_state.base_url}/v2/models/{st.session_state.selected_model}/infer",
+                                "pdf_anonymize",
+                                "success",
+                                elapsed_time
+                            )
+
+                            # Download button
+                            st.download_button(
+                                label="⬇️ Download Anonymized PDF",
+                                data=result_pdf,
+                                file_name=f"anonymized_{uploaded_file.name}",
+                                mime="application/pdf",
+                                use_container_width=True
+                            )
+
+                            # Show errors if any
+                            if errors:
+                                with st.expander(f"⚠️ {len(errors)} Errors During Processing", expanded=False):
+                                    for error in errors:
+                                        st.text(f"• {error}")
+                        else:
+                            st.error(f"❌ {summary}")
+                            add_to_history(
+                                f"{st.session_state.base_url}/v2/models/{st.session_state.selected_model}/infer",
+                                "pdf_anonymize",
+                                "error",
+                                elapsed_time
+                            )
 
                 except Exception as e:
                     elapsed_time = time.time() - start_time
                     st.error(f"❌ Unexpected error: {str(e)}")
                     add_to_history(
-                        f"{st.session_state.base_url}/v2/models/{st.session_state.selected_model}/infer",
-                        "pdf_anonymize",
+                        "presidio_local" if anonymization_mode == "presidio" else f"{st.session_state.base_url}/v2/models/{st.session_state.selected_model}/infer",
+                        "pdf_anonymize_presidio" if anonymization_mode == "presidio" else "pdf_anonymize",
                         "error",
                         elapsed_time
                     )
@@ -557,15 +666,24 @@ if ENABLE_PDF_ANONYMIZATION:
             with st.container(border=True):
                 st.subheader("ℹ️ How It Works")
                 st.markdown("""
+                **Presidio Mode (Local PII Masking)**:
                 1. **Upload**: Select a PDF file (max 10MB)
                 2. **Convert**: PDF is converted to markdown using docling
-                3. **Split**: Markdown is split into individual sentences
+                3. **Analyze**: Presidio detects PII entities locally
+                4. **Anonymize**: PII is replaced with entity type placeholders
+                5. **Rebuild**: Anonymized text is converted back to PDF
+                6. **Download**: Get your anonymized PDF with before/after diff
+
+                **KServe Mode (AI Model)**:
+                1. **Upload**: Select a PDF file (max 10MB)
+                2. **Convert**: PDF is converted to markdown using docling
+                3. **Split**: Markdown is split into individual sentences using NLTK
                 4. **Anonymize**: Each sentence is processed through the AI model
                 5. **Rebuild**: Anonymized text is converted back to PDF
                 6. **Download**: Get your anonymized PDF
 
-                **Note**: Uses docling for high-quality PDF text extraction.
-                Processing time depends on the number of sentences in the document.
+                **Note**: Presidio runs locally and provides privacy-preserving PII detection.
+                KServe uses an external AI model for context-aware anonymization.
                 """)
 
 # Tab 3: PDF Summarization (only if enabled)

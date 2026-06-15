@@ -15,3 +15,15 @@ features:
   text_anonymization: false
   pdf_anonymization: true
   pdf_summarization: true
+
+# Presidio configuration for PII detection and anonymization
+#
+# spacy_model: The spaCy language model to use for Presidio NER
+#              Options: en_core_web_sm (small, 12MB, faster, less accurate)
+#                       en_core_web_md (medium, 40MB, balanced)
+#                       en_core_web_lg (large, 380MB, slower, more accurate)
+#                       en_core_web_trf (transformer, 440MB, most accurate, slowest)
+#              Default: en_core_web_lg (recommended for production)
+
+presidio:
+  spacy_model: en_core_web_lg
