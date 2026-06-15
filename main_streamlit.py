@@ -588,14 +588,14 @@ if ENABLE_PDF_ANONYMIZATION:
 
                             # Display diff
                             if original_md and anonymized_md:
-                                diff_markdown = generate_anonymization_diff(
+                                diff_html = generate_anonymization_diff(
                                     original_md,
                                     anonymized_md,
                                     entities,
                                     anonymization_mode="presidio"
                                 )
                                 with st.expander("📊 Before/After Comparison", expanded=True):
-                                    st.markdown(diff_markdown)
+                                    st.markdown(diff_html, unsafe_allow_html=True)
 
                             # Download button
                             st.download_button(
@@ -636,14 +636,14 @@ if ENABLE_PDF_ANONYMIZATION:
 
                             # Display diff
                             if original_md and anonymized_md:
-                                diff_markdown = generate_anonymization_diff(
+                                diff_html = generate_anonymization_diff(
                                     original_md,
                                     anonymized_md,
                                     detected_entities=None,
                                     anonymization_mode="kserve"
                                 )
                                 with st.expander("📊 Before/After Comparison", expanded=True):
-                                    st.markdown(diff_markdown)
+                                    st.markdown(diff_html, unsafe_allow_html=True)
 
                             # Download button
                             st.download_button(
