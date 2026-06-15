@@ -78,6 +78,32 @@ except Exception as e:
     print(f"Warning: Could not verify spaCy language model: {e}")
     print("Presidio PII anonymization may not work without the language model")
     # Continue anyway - will show error in UI if Presidio is used
+
+# Configure GPU/MPS for Presidio
+gpu_config = {
+    'gpu_enabled': presidio_config.get('gpu_enabled', 'auto'),
+    'device': presidio_config.get('device', 'auto')
+}
+
+# Import GPU detection utility
+from libs.presidio import detect_and_configure_gpu
+
+# Configure GPU/MPS and get status
+try:
+    device_used, device_type, gpu_status = detect_and_configure_gpu(gpu_config)
+    print(f"✓ Presidio device configuration: {gpu_status}")
+
+    # Store device info in session state for UI display
+    if 'presidio_device' not in st.session_state:
+        st.session_state.presidio_device = device_used
+        st.session_state.presidio_device_type = device_type
+except Exception as e:
+    print(f"⚠ Device configuration warning: {e}")
+    print("  Continuing with CPU fallback")
+    if 'presidio_device' not in st.session_state:
+        st.session_state.presidio_device = 'cpu'
+        st.session_state.presidio_device_type = 'cpu'
+
 ENABLE_PDF_ANONYMIZATION = features.get('pdf_anonymization', False)
 ENABLE_PDF_SUMMARIZATION = features.get('pdf_summarization', False)
 
@@ -226,6 +252,43 @@ else:
         endpoint_url = None
 
 st.sidebar.divider()
+
+# Presidio Device Status (if PDF anonymization is enabled)
+if ENABLE_PDF_ANONYMIZATION:
+    with st.sidebar.expander("🔧 Presidio Status", expanded=False):
+        try:
+            import torch
+            device = st.session_state.get('presidio_device', 'cpu')
+            device_type = st.session_state.get('presidio_device_type', 'cpu')
+
+            if device_type == 'nvidia':
+                # NVIDIA GPU
+                device_name = torch.cuda.get_device_name(0)
+                st.success(f"🎮 NVIDIA GPU: {device_name}")
+                # Show GPU memory usage
+                memory_allocated = torch.cuda.memory_allocated(0) / 1024**3
+                memory_reserved = torch.cuda.memory_reserved(0) / 1024**3
+                st.text(f"Memory: {memory_allocated:.2f}GB / {memory_reserved:.2f}GB")
+                st.text(f"Device: {device}")
+
+            elif device_type == 'apple':
+                # Apple Silicon
+                st.success(f"🍎 Apple Silicon GPU (MPS)")
+                st.text(f"Device: {device}")
+                # Note: MPS doesn't expose memory usage via PyTorch
+                st.caption("Memory usage not available for MPS")
+
+            else:
+                # CPU
+                st.info("💻 Device: CPU")
+
+        except Exception as e:
+            st.warning(f"Status unavailable: {str(e)}")
+
+        # Show configured spaCy model
+        st.text(f"Model: {SPACY_MODEL}")
+
+    st.sidebar.divider()
 
 # Request History in Sidebar
 with st.sidebar.expander("📜 Request History", expanded=False):

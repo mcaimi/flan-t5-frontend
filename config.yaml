@@ -24,6 +24,29 @@ features:
 #                       en_core_web_lg (large, 380MB, slower, more accurate)
 #                       en_core_web_trf (transformer, 440MB, most accurate, slowest)
 #              Default: en_core_web_lg (recommended for production)
+#
+# gpu_enabled: Enable GPU/accelerator support for faster processing
+#              Options: auto (auto-detect GPU), true (force GPU), false (force CPU)
+#              Default: auto
+#              - auto: Automatically use GPU if available (CUDA or MPS), fallback to CPU
+#              - true: Force GPU usage, show warning if not available
+#              - false: Always use CPU even if GPU is available
+#
+# device: Specific PyTorch device to use
+#         Options: auto, cuda, cuda:0, cuda:1, mps, cpu
+#         Default: auto
+#         - auto: Auto-detect best available device (CUDA > MPS > CPU)
+#         - cuda / cuda:0: NVIDIA GPU (first GPU)
+#         - cuda:1: NVIDIA GPU (second GPU, if available)
+#         - mps: Apple Silicon GPU (M1/M2/M3/M4 Macs with macOS 12.3+)
+#         - cpu: CPU only
+#
+# Performance notes:
+# - NVIDIA GPUs: 2-3x faster for large docs, 5-10x for transformer models
+# - Apple Silicon MPS: 1.5-2.5x faster for large docs, 3-5x for transformer models
+# - GPU acceleration most beneficial for large PDFs (20+ pages) and transformer models
 
 presidio:
   spacy_model: en_core_web_lg
+  gpu_enabled: auto
+  device: auto
