@@ -15,7 +15,7 @@ except ImportError:
 try:
     from libs.apis import build_payload, fetch_available_models, add_to_history
     from libs.ui import render_text_input, display_payload_preview, display_response
-    from libs.pdf_processor import anonymize_pdf, summarize_pdf
+    from libs.pdf_processor import anonymize_pdf, summarize_pdf, summarize_pdf_full
     from libs.presidio import anonymize_pdf_with_presidio
     from libs.diff_utils import generate_anonymization_diff
 except ImportError:
@@ -57,8 +57,24 @@ presidio_config = config.get('presidio', {})
 ENABLE_TEXT_ANONYMIZATION = features.get('text_anonymization', False)
 
 # Ensure spaCy language model is available for Presidio at startup
-# Get configured spaCy model (default: en_core_web_lg)
-SPACY_MODEL = presidio_config.get('spacy_model', 'en_core_web_lg')
+# Get configured language and model size (with fallback to spacy_model for backward compatibility)
+DEFAULT_LANGUAGE = presidio_config.get('language', 'en')
+DEFAULT_MODEL_SIZE = presidio_config.get('model_size', 'large')
+
+# Generate default spacy model name from language and size, or use explicit spacy_model
+from libs.presidio import get_spacy_model_name
+if 'spacy_model' in presidio_config and presidio_config['spacy_model']:
+    # Explicit model specified - use it directly (backward compatibility)
+    SPACY_MODEL = presidio_config['spacy_model']
+else:
+    # Generate model name from language and size
+    SPACY_MODEL, _ = get_spacy_model_name(DEFAULT_LANGUAGE, DEFAULT_MODEL_SIZE)
+
+# Initialize session state with defaults
+if "selected_language" not in st.session_state:
+    st.session_state.selected_language = DEFAULT_LANGUAGE
+if "selected_model_size" not in st.session_state:
+    st.session_state.selected_model_size = DEFAULT_MODEL_SIZE
 
 try:
     import spacy
@@ -149,6 +165,15 @@ if "presidio_anonymizer" not in st.session_state:
 
 if "presidio_initialized" not in st.session_state:
     st.session_state.presidio_initialized = False
+
+if "selected_language" not in st.session_state:
+    st.session_state.selected_language = "en"
+
+if "selected_model_size" not in st.session_state:
+    st.session_state.selected_model_size = "large"
+
+if "presidio_language_code" not in st.session_state:
+    st.session_state.presidio_language_code = "en"
 
 # Default texts
 DEFAULT_TEXTS = {
@@ -285,8 +310,20 @@ if ENABLE_PDF_ANONYMIZATION:
         except Exception as e:
             st.warning(f"Status unavailable: {str(e)}")
 
-        # Show configured spaCy model
-        st.text(f"Model: {SPACY_MODEL}")
+        # Show configured spaCy model and language
+        from libs.presidio import get_spacy_model_name
+        current_model, _ = get_spacy_model_name(
+            st.session_state.selected_language,
+            st.session_state.selected_model_size
+        )
+        st.text(f"Model: {current_model}")
+        lang_display = {
+            'en': 'English',
+            'it': 'Italian',
+            'es': 'Spanish',
+            'de': 'German'
+        }.get(st.session_state.selected_language, st.session_state.selected_language.upper())
+        st.text(f"Language: {lang_display}")
 
     st.sidebar.divider()
 
@@ -599,6 +636,42 @@ if ENABLE_PDF_ANONYMIZATION:
                     help="Model selected in sidebar"
                 )
             else:
+                # Language selector for Presidio
+                col_lang, col_size = st.columns(2)
+
+                with col_lang:
+                    selected_language = st.selectbox(
+                        "Language",
+                        options=['en', 'it', 'es', 'de'],
+                        format_func=lambda x: {
+                            'en': '🇬🇧 English',
+                            'it': '🇮🇹 Italian',
+                            'es': '🇪🇸 Spanish',
+                            'de': '🇩🇪 German'
+                        }[x],
+                        index=['en', 'it', 'es', 'de'].index(st.session_state.selected_language),
+                        help="Select document language for PII detection",
+                        key="presidio_language"
+                    )
+
+                with col_size:
+                    selected_model_size = st.selectbox(
+                        "Model Size",
+                        options=['small', 'medium', 'large'],
+                        format_func=lambda x: {
+                            'small': '⚡ Small (Fast)',
+                            'medium': '⚖️ Medium (Balanced)',
+                            'large': '🎯 Large (Accurate)'
+                        }[x],
+                        index=['small', 'medium', 'large'].index(st.session_state.selected_model_size),
+                        help="Larger models are more accurate but slower",
+                        key="presidio_model_size"
+                    )
+
+                # Update session state
+                st.session_state.selected_language = selected_language
+                st.session_state.selected_model_size = selected_model_size
+
                 # Entity type selector for Presidio
                 entity_options = st.multiselect(
                     "PII Entity Types",
@@ -615,9 +688,38 @@ if ENABLE_PDF_ANONYMIZATION:
         st.divider()
 
         if uploaded_file:
+            # Check if spaCy model needs to be downloaded for selected language (Presidio mode only)
+            if anonymization_mode == "presidio":
+                from libs.presidio import get_spacy_model_name
+                required_model, lang_code = get_spacy_model_name(
+                    st.session_state.selected_language,
+                    st.session_state.selected_model_size
+                )
+
+                # Show model info
+                st.info(f"Using spaCy model: `{required_model}` for {st.session_state.selected_language.upper()} text")
+
             process_button = st.button("🔒 Anonymize PDF", type="primary", use_container_width=True)
 
             if process_button:
+                # Ensure model is available for Presidio mode
+                if anonymization_mode == "presidio":
+                    try:
+                        import spacy
+                        try:
+                            spacy.load(required_model)
+                        except OSError:
+                            with st.spinner(f"Downloading {required_model} model (first use only, may take a few minutes)..."):
+                                import subprocess
+                                import sys
+                                subprocess.check_call([
+                                    sys.executable, "-m", "spacy", "download", required_model
+                                ])
+                                st.success(f"Model {required_model} downloaded successfully!")
+                    except Exception as e:
+                        st.error(f"Failed to load spaCy model: {e}")
+                        st.stop()
+
                 start_time = time.time()
 
                 # Progress tracking
@@ -635,7 +737,8 @@ if ENABLE_PDF_ANONYMIZATION:
                             uploaded_file,
                             entity_options if entity_options else None,
                             update_progress,
-                            SPACY_MODEL
+                            required_model,
+                            lang_code
                         )
 
                         elapsed_time = time.time() - start_time
@@ -801,6 +904,17 @@ if ENABLE_PDF_SUMMARIZATION:
                 key="pdf_summary_model_display"
             )
 
+            summarization_mode = st.radio(
+                "Processing Mode",
+                options=["sentence", "full_document"],
+                format_func=lambda x: {
+                    "sentence": "📝 Sentence-by-Sentence",
+                    "full_document": "📄 Full Document"
+                }[x],
+                help="Sentence: Processes each sentence individually (detailed). Full Document: Sends entire document in one request (faster).",
+                key="summary_mode_selector"
+            )
+
         st.divider()
 
         if uploaded_summary_file:
@@ -818,12 +932,21 @@ if ENABLE_PDF_SUMMARIZATION:
                     status_text.text(msg)
 
                 try:
-                    summary_text, summary_pdf, status_msg, errors = summarize_pdf(
-                        uploaded_summary_file,
-                        st.session_state.selected_model,
-                        st.session_state.base_url,
-                        update_progress
-                    )
+                    # Call appropriate function based on selected mode
+                    if summarization_mode == "sentence":
+                        summary_text, summary_pdf, status_msg, errors = summarize_pdf(
+                            uploaded_summary_file,
+                            st.session_state.selected_model,
+                            st.session_state.base_url,
+                            update_progress
+                        )
+                    else:  # full_document
+                        summary_text, summary_pdf, status_msg, errors = summarize_pdf_full(
+                            uploaded_summary_file,
+                            st.session_state.selected_model,
+                            st.session_state.base_url,
+                            update_progress
+                        )
 
                     elapsed_time = time.time() - start_time
 
@@ -904,10 +1027,13 @@ if ENABLE_PDF_SUMMARIZATION:
                 st.markdown("""
                 1. **Upload**: Select a PDF file (max 10MB)
                 2. **Convert**: PDF is converted to markdown using docling
-                3. **Summarize**: The entire document is sent to the AI model for summarization
-                4. **Display**: The generated summary is displayed on the page
-                5. **Download**: Get your summary as PDF or plain text
+                3. **Choose Mode**:
+                   - **Sentence-by-Sentence**: Splits document into sentences and processes each individually (more granular, multiple API calls)
+                   - **Full Document**: Sends the entire document to the AI in one request (faster, single API call)
+                4. **Summarize**: The AI model generates a concise summary
+                5. **Display**: The generated summary is displayed on the page
+                6. **Download**: Get your summary as PDF or plain text
 
                 **Note**: Uses docling for high-quality PDF text extraction.
-                The AI model generates a concise summary of the entire document.
+                Both modes use the same AI model but differ in how the text is sent for processing.
                 """)

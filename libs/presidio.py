@@ -11,6 +11,46 @@ except ImportError as e:
     exit(1)
 
 
+# Language code mapping for spaCy models
+LANGUAGE_CODES = {
+    'en': 'en',  # English
+    'it': 'it',  # Italian
+    'es': 'es',  # Spanish
+    'de': 'de'   # German
+}
+
+# Model size to spaCy suffix mapping
+MODEL_SIZES = {
+    'small': 'sm',
+    'medium': 'md',
+    'large': 'lg'
+}
+
+
+def get_spacy_model_name(language: str, size: str) -> Tuple[str, str]:
+    """Generate spaCy model name from language and size.
+
+    Args:
+        language: Language code ('en', 'it', 'es', 'de')
+        size: Model size ('small', 'medium', 'large')
+
+    Returns:
+        Tuple of (model_name, lang_code)
+        - model_name: Full spaCy model name (e.g., 'it_core_news_md')
+        - lang_code: ISO language code for Presidio (e.g., 'it')
+    """
+    lang_code = LANGUAGE_CODES.get(language, 'en')
+    size_suffix = MODEL_SIZES.get(size, 'lg')
+
+    # English uses different naming pattern
+    if language == 'en':
+        model_name = f'en_core_web_{size_suffix}'
+    else:
+        model_name = f'{lang_code}_core_news_{size_suffix}'
+
+    return model_name, lang_code
+
+
 def detect_and_configure_gpu(gpu_config: dict) -> Tuple[str, str, str]:
     """Detect GPU/MPS availability and configure Presidio device.
 
@@ -115,7 +155,7 @@ def detect_and_configure_gpu(gpu_config: dict) -> Tuple[str, str, str]:
     return device, device_type, status
 
 
-def initialize_presidio(spacy_model: str = "en_core_web_lg") -> Tuple[Optional[AnalyzerEngine], Optional[AnonymizerEngine], Optional[str]]:
+def initialize_presidio(spacy_model: str = "en_core_web_lg", language_code: str = "en") -> Tuple[Optional[AnalyzerEngine], Optional[AnonymizerEngine], Optional[str]]:
     """Initialize Presidio analyzer and anonymizer engines.
 
     This function initializes the Presidio engines with caching support for Streamlit.
@@ -124,7 +164,10 @@ def initialize_presidio(spacy_model: str = "en_core_web_lg") -> Tuple[Optional[A
 
     Args:
         spacy_model: Name of the spaCy model to use for NER (default: en_core_web_lg).
-                    Options: en_core_web_sm, en_core_web_md, en_core_web_lg, en_core_web_trf
+                    Options: en_core_web_sm, en_core_web_md, en_core_web_lg, en_core_web_trf,
+                    it_core_news_sm/md/lg, es_core_news_sm/md/lg, de_core_news_sm/md/lg
+        language_code: ISO language code for Presidio analyzer (default: 'en').
+                      Options: 'en', 'it', 'es', 'de'
 
     Returns:
         Tuple of (analyzer_engine, anonymizer_engine, error_message).
@@ -135,16 +178,17 @@ def initialize_presidio(spacy_model: str = "en_core_web_lg") -> Tuple[Optional[A
         try:
             import streamlit as st
             if st.session_state.get("presidio_initialized", False):
-                # Verify cached model matches requested model
-                if st.session_state.get("presidio_spacy_model") == spacy_model:
+                # Verify cached model and language match requested parameters
+                if st.session_state.get("presidio_spacy_model") == spacy_model and \
+                   st.session_state.get("presidio_language_code") == language_code:
                     return (
                         st.session_state.presidio_analyzer,
                         st.session_state.presidio_anonymizer,
                         None
                     )
                 else:
-                    # Model changed, reinitialize
-                    print(f"Reinitializing Presidio with new model: {spacy_model}")
+                    # Model or language changed, reinitialize
+                    print(f"Reinitializing Presidio with new model: {spacy_model}, language: {language_code}")
         except (ImportError, AttributeError, RuntimeError):
             # Not in Streamlit context or session state not available
             pass
@@ -154,7 +198,7 @@ def initialize_presidio(spacy_model: str = "en_core_web_lg") -> Tuple[Optional[A
 
         nlp_configuration = {
             "nlp_engine_name": "spacy",
-            "models": [{"lang_code": "en", "model_name": spacy_model}]
+            "models": [{"lang_code": language_code, "model_name": spacy_model}]
         }
 
         nlp_engine = NlpEngineProvider(nlp_configuration=nlp_configuration).create_engine()
@@ -167,6 +211,7 @@ def initialize_presidio(spacy_model: str = "en_core_web_lg") -> Tuple[Optional[A
             st.session_state.presidio_analyzer = analyzer
             st.session_state.presidio_anonymizer = anonymizer
             st.session_state.presidio_spacy_model = spacy_model
+            st.session_state.presidio_language_code = language_code
             st.session_state.presidio_initialized = True
         except (ImportError, AttributeError, RuntimeError):
             # Not in Streamlit context, continue without caching
@@ -184,7 +229,8 @@ def anonymize_text_with_presidio(
     text: str,
     analyzer: AnalyzerEngine,
     anonymizer: AnonymizerEngine,
-    entities: Optional[List[str]] = None
+    entities: Optional[List[str]] = None,
+    language: str = 'en'
 ) -> Tuple[Optional[str], List[dict], Optional[str]]:
     """Anonymize text using Presidio PII detection and anonymization.
 
@@ -194,6 +240,8 @@ def anonymize_text_with_presidio(
         anonymizer: Presidio AnonymizerEngine instance
         entities: List of entity types to detect (e.g., ["PERSON", "EMAIL_ADDRESS"]).
                  If None, all default entities will be detected.
+        language: ISO language code for text analysis (default: 'en').
+                 Options: 'en', 'it', 'es', 'de'
 
     Returns:
         Tuple of (anonymized_text, detected_entities, error_message).
@@ -210,7 +258,7 @@ def anonymize_text_with_presidio(
         # Analyze text for PII
         results = analyzer.analyze(
             text=text,
-            language='en',
+            language=language,
             entities=entities if entities else None
         )
 
@@ -280,7 +328,8 @@ def anonymize_pdf_with_presidio(
     pdf_file,
     entities: Optional[List[str]] = None,
     progress_callback: Optional[Callable[[float, str], None]] = None,
-    spacy_model: str = "en_core_web_lg"
+    spacy_model: str = "en_core_web_lg",
+    language_code: str = "en"
 ) -> Tuple[Optional[bytes], Optional[str], Optional[str], List[dict], Optional[str]]:
     """Main orchestration function for Presidio-based PDF anonymization.
 
@@ -296,6 +345,8 @@ def anonymize_pdf_with_presidio(
         progress_callback: Optional callback function(percent: float, message: str)
                           to report progress updates
         spacy_model: Name of the spaCy model to use for NER (default: en_core_web_lg)
+        language_code: ISO language code for Presidio analyzer (default: 'en').
+                      Options: 'en', 'it', 'es', 'de'
 
     Returns:
         Tuple of (pdf_bytes, original_markdown, anonymized_markdown,
@@ -329,8 +380,8 @@ def anonymize_pdf_with_presidio(
         if progress_callback:
             progress_callback(0.3, f"Initializing Presidio engines with {spacy_model}...")
 
-        # Step 2: Initialize Presidio with specified spaCy model
-        analyzer, anonymizer, init_error = initialize_presidio(spacy_model)
+        # Step 2: Initialize Presidio with specified spaCy model and language
+        analyzer, anonymizer, init_error = initialize_presidio(spacy_model, language_code)
         if init_error:
             return None, None, None, [], f"Presidio initialization failed: {init_error}"
 
@@ -343,7 +394,8 @@ def anonymize_pdf_with_presidio(
                 original_markdown,
                 analyzer,
                 anonymizer,
-                entities
+                entities,
+                language_code
             )
 
             if anon_error:
@@ -378,7 +430,7 @@ def anonymize_pdf_with_presidio(
                 print("  Reinitializing Presidio engines with CPU...")
 
                 # Reinitialize engines with CPU
-                analyzer, anonymizer, init_error = initialize_presidio(spacy_model)
+                analyzer, anonymizer, init_error = initialize_presidio(spacy_model, language_code)
                 if init_error:
                     return None, None, None, [], f"CPU fallback initialization failed: {init_error}"
 
@@ -390,7 +442,8 @@ def anonymize_pdf_with_presidio(
                     original_markdown,
                     analyzer,
                     anonymizer,
-                    entities
+                    entities,
+                    language_code
                 )
 
                 if anon_error:

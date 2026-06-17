@@ -12,9 +12,10 @@ COPY . .
 # Install any dependencies
 RUN if [ -f requirements.txt ]; \
     then pip install --no-cache-dir -r requirements.txt; \
-  elif [ `ls -1q *.txt | wc -l` == 1 ]; \
-    then pip install --no-cache-dir -r *.txt; \
   fi
+
+# pre-install nltk tokenizer
+RUN python -c "import nltk; nltk.download('punkt_tab', quiet=True)"
 
 ENV PYTHONWARNINGS="ignore::FutureWarning:transformers"
 

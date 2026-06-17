@@ -6,7 +6,7 @@ This repository contains a Streamlit application for interacting with a KServe-b
 
 - 🤖 Interactive web interface for FLAN-T5 model inference
 - 📄 **PDF Anonymization**: Upload PDFs, extract text with docling, split into sentences using NLTK, anonymize each sentence, and download anonymized PDF with two modes:
-  - **Presidio Mode** (Local PII Masking): Privacy-preserving local PII detection and masking using Microsoft Presidio
+  - **Presidio Mode** (Local PII Masking): Privacy-preserving local PII detection and masking using Microsoft Presidio with **multi-language support** (English, Italian, Spanish, German)
   - **KServe Mode** (AI Model): Context-aware anonymization using external AI model
 - 📝 **PDF Summarization**: Upload PDFs, extract text with docling, split into sentences using NLTK, summarize each sentence, and download as PDF or TXT
 - 🔒 **Text Anonymization** (optional): Single-sentence anonymization, translation, and summarization for quick text processing
@@ -57,7 +57,9 @@ features:
   pdf_summarization: true    # Enable PDF document summarization tab
 
 presidio:
-  spacy_model: en_core_web_lg  # spaCy model for Presidio NER (sm/md/lg/trf)
+  language: en                 # Language for PII detection: en, it, es, de
+  model_size: large            # Model size: small, medium, large
+  spacy_model: en_core_web_lg  # (Optional) Explicit spaCy model (overrides language + model_size)
   gpu_enabled: auto            # GPU acceleration: auto, true, false
   device: auto                 # Device selection: auto, cuda, cuda:0, mps, cpu
 ```
@@ -105,9 +107,47 @@ The application dynamically creates tabs based on enabled features. You can enab
    ```
    Displays a courtesy message: "There are no features enabled for this instance"
 
+### Multi-Language Support for Presidio
+
+Presidio now supports PII detection in multiple languages with configurable spaCy models:
+
+**Configuration options:**
+
+- **`language`**: Default language for PII detection
+  - `en` (English, default)
+  - `it` (Italian)
+  - `es` (Spanish)
+  - `de` (German)
+
+- **`model_size`**: spaCy model size (quality vs speed tradeoff)
+  - `small`: Fastest, ~25-30MB, ~70-80% accuracy
+  - `medium`: Balanced, ~40-50MB, ~85-90% accuracy
+  - `large` (default): Most accurate, ~100-560MB, ~90-95% accuracy
+
+- **`spacy_model`**: (Optional) Explicit spaCy model name
+  - If specified, overrides `language` and `model_size` settings
+  - Useful for backward compatibility or advanced configurations
+
+**Available spaCy models by language:**
+
+| Language | Small | Medium | Large |
+|----------|-------|--------|-------|
+| 🇬🇧 English | en_core_web_sm | en_core_web_md | en_core_web_lg |
+| 🇮🇹 Italian | it_core_news_sm | it_core_news_md | it_core_news_lg |
+| 🇪🇸 Spanish | es_core_news_sm | es_core_news_md | es_core_news_lg |
+| 🇩🇪 German | de_core_news_sm | de_core_news_md | de_core_news_lg |
+
+**Runtime language selection:**
+
+The PDF Anonymization interface (Presidio mode) provides dropdown selectors to choose:
+- **Language**: Select document language (English, Italian, Spanish, German)
+- **Model Size**: Choose quality vs speed tradeoff (Small/Fast, Medium/Balanced, Large/Accurate)
+
+Models are downloaded automatically on first use with progress feedback in the UI.
+
 ### GPU Acceleration for Presidio
 
-Presidio supports GPU acceleration on both NVIDIA GPUs (CUDA) and Apple Silicon (MPS) for faster PII detection:
+Presidio supports GPU acceleration on both NVIDIA GPUs (CUDA) and Apple Silicon (MPS) for faster PII detection across all supported languages:
 
 **Configuration options:**
 
@@ -139,33 +179,43 @@ Presidio supports GPU acceleration on both NVIDIA GPUs (CUDA) and Apple Silicon 
 
 **GPU memory usage:**
 
-| spaCy Model | NVIDIA GPU | Apple Silicon (MPS) |
-|-------------|------------|---------------------|
-| `en_core_web_sm` | ~0.5GB | Shares unified memory |
-| `en_core_web_md` | ~1.0GB | Shares unified memory |
-| `en_core_web_lg` | ~2.0GB | Shares unified memory |
-| `en_core_web_trf` | ~4-6GB | Shares unified memory |
+| Model Size | NVIDIA GPU | Apple Silicon (MPS) |
+|------------|------------|---------------------|
+| Small (`*_sm`) | ~0.5GB | Shares unified memory |
+| Medium (`*_md`) | ~1.0GB | Shares unified memory |
+| Large (`*_lg`) | ~2.0GB | Shares unified memory |
+
+*Memory usage is similar across all supported languages (en/it/es/de)*
 
 **Recommended configurations:**
 
 ```yaml
-# NVIDIA GPU system
+# NVIDIA GPU system - English documents
 presidio:
-  spacy_model: en_core_web_trf
+  language: en
+  model_size: large
   gpu_enabled: auto
   device: cuda:0
 
-# Apple Silicon Mac
+# Apple Silicon Mac - Italian documents
 presidio:
-  spacy_model: en_core_web_lg
+  language: it
+  model_size: medium  # Balanced for MPS
   gpu_enabled: auto
   device: mps
 
-# CPU-only (e.g., cloud deployment without GPU)
+# CPU-only - Spanish documents (e.g., cloud deployment without GPU)
 presidio:
-  spacy_model: en_core_web_lg
+  language: es
+  model_size: small  # Faster on CPU
   gpu_enabled: false
   device: cpu
+
+# Multi-language with explicit model (backward compatibility)
+presidio:
+  spacy_model: de_core_news_lg  # German, large model
+  gpu_enabled: auto
+  device: auto
 ```
 
 **Monitoring GPU usage:**
@@ -174,6 +224,7 @@ The application displays device status in the sidebar under "🔧 Presidio Statu
 - NVIDIA GPU: Shows GPU name and memory usage
 - Apple Silicon: Shows "Apple Silicon GPU (MPS)"
 - CPU: Shows "Device: CPU"
+- Also displays: Current spaCy model and selected language
 
 **Error handling:**
 
@@ -206,7 +257,12 @@ The Streamlit application provides a comprehensive web interface with:
 **PDF Anonymization Tab** (when `pdf_anonymization: true`):
 - PDF file upload (max 10MB)
 - Anonymization mode selector:
-  - **Presidio Mode**: Local privacy-preserving PII detection with configurable entity types (PERSON, EMAIL_ADDRESS, PHONE_NUMBER, etc.)
+  - **Presidio Mode**: Local privacy-preserving PII detection with:
+    - **Multi-language support**: English, Italian, Spanish, German
+    - **Language selector**: Choose document language with flag emojis (🇬🇧 🇮🇹 🇪🇸 🇩🇪)
+    - **Model size selector**: Balance quality vs speed (Small/Fast, Medium/Balanced, Large/Accurate)
+    - **Entity type configuration**: Select which PII types to detect (PERSON, EMAIL_ADDRESS, PHONE_NUMBER, etc.)
+    - **Auto-download models**: First-time model download with progress feedback
   - **KServe Mode**: AI model-based context-aware anonymization
 - Automatic text extraction using docling
 - Intelligent sentence splitting using NLTK (KServe mode only)
@@ -265,10 +321,12 @@ For privacy-preserving local anonymization:
 
 **Presidio Mode (Local PII Masking)**:
 - **Privacy-preserving**: All processing happens locally, no data sent to external APIs
+- **Multi-language**: Supports English, Italian, Spanish, and German documents
 - **Fast**: No network latency, instant PII detection
-- **Configurable**: Choose which entity types to detect and mask
+- **Configurable**: Choose which entity types to detect and mask, select model size for quality/speed tradeoff
 - **Transparent**: See exactly what was detected with entity type and confidence scores
 - **Deterministic**: Same input always produces the same output
+- **GPU accelerated**: Optional GPU support (NVIDIA CUDA, Apple Silicon MPS) for faster processing
 
 **KServe Mode (AI Model)**:
 - **Context-aware**: AI model understands context for more nuanced anonymization
@@ -313,19 +371,38 @@ The default behaviour can be also modified via environment variables: this is us
 
 The application automatically downloads required models on first run:
 - **NLTK punkt tokenizer**: Downloaded automatically for sentence splitting
-- **spaCy language model**: Downloaded automatically for Presidio NER (default: `en_core_web_lg`)
+- **spaCy language models**: Downloaded automatically for Presidio NER based on language selection
 
-You can configure which spaCy model to use in `config.yaml`:
+**Configuration options:**
+
 ```yaml
+# Recommended: Use language + model_size (automatically generates correct model)
 presidio:
-  spacy_model: en_core_web_lg  # Options: en_core_web_sm, en_core_web_md, en_core_web_lg, en_core_web_trf
+  language: en        # en, it, es, de
+  model_size: large   # small, medium, large
+
+# Alternative: Explicit model name (backward compatibility)
+presidio:
+  spacy_model: it_core_news_lg  # Explicit Italian large model
 ```
 
-Model sizes and accuracy:
-- `en_core_web_sm` (~12 MB): Small, fast, less accurate
-- `en_core_web_md` (~40 MB): Medium, balanced
-- `en_core_web_lg` (~560 MB): Large, most accurate (default)
-- `en_core_web_trf` (~440 MB): Transformer-based, highest accuracy, slower
+**Available spaCy models:**
+
+| Language | Small (~25-30MB) | Medium (~40-50MB) | Large (~100-560MB) |
+|----------|------------------|-------------------|---------------------|
+| English  | en_core_web_sm   | en_core_web_md    | en_core_web_lg      |
+| Italian  | it_core_news_sm  | it_core_news_md   | it_core_news_lg     |
+| Spanish  | es_core_news_sm  | es_core_news_md   | es_core_news_lg     |
+| German   | de_core_news_sm  | de_core_news_md   | de_core_news_lg     |
+
+**Model quality tradeoffs:**
+- **Small**: 2-3x faster, ~70-80% accuracy
+- **Medium**: Balanced, ~85-90% accuracy
+- **Large**: Most accurate, ~90-95% accuracy (default)
+
+**Runtime model selection:**
+
+Users can also select language and model size directly in the PDF Anonymization UI. Models are downloaded on-demand when first selected, with progress feedback shown in the interface.
 
 ## Building the image on Openshift using OCP BuildConfigs
 
