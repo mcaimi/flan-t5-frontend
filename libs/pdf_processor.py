@@ -188,6 +188,24 @@ def summarize_sentences(
     return process_sentences(sentences, model_name, base_url, "summarize", progress_callback)
 
 
+def summarize_full_document(
+    text: str,
+    model_name: str,
+    base_url: str,
+) -> Tuple[Optional[str], Optional[str]]:
+    """Summarize entire document in one API call (no sentence splitting).
+
+    Args:
+        text: Full document text to summarize
+        model_name: Name of the model to call
+        base_url: Base URL of the KServe endpoint
+
+    Returns:
+        (summarized_text, error_message) - one will be None
+    """
+    return _call_kserve_api(model_name, base_url, "summarize", {"text": text})
+
+
 def _create_pdf_from_text(
     text: str, pagesize: Tuple[float, float] = letter, handle_markdown: bool = False
 ) -> bytes:
@@ -305,6 +323,75 @@ def summarize_pdf(
     )
 
 
+def summarize_pdf_full(
+    pdf_file,
+    model_name: str,
+    base_url: str,
+    progress_callback: Optional[Callable[[float, str], None]] = None,
+) -> Tuple[Optional[str], Optional[bytes], str, List[str]]:
+    """Process PDF for summarization: extract to markdown, send full document to AI in one call.
+
+    Pipeline:
+    1. PDF → Markdown (via docling)
+    2. Send full markdown to model (single KServe API call)
+    3. Markdown → PDF (via reportlab)
+
+    Args:
+        pdf_file: PDF file object to process
+        model_name: Name of the model to call
+        base_url: Base URL of the KServe endpoint
+        progress_callback: Optional callback for progress updates
+
+    Returns (summary_text, summary_pdf_bytes, status_message, errors)
+    """
+    try:
+        if progress_callback:
+            progress_callback(0.05, "Reading PDF...")
+
+        pdf_bytes = pdf_file.read()
+
+        if len(pdf_bytes) > 10 * 1024 * 1024:
+            return None, None, "Error: PDF file exceeds 10MB limit", []
+
+        if progress_callback:
+            progress_callback(0.1, "Converting PDF to markdown with docling...")
+
+        # Step 1: PDF → Markdown
+        markdown_text = pdf_to_markdown(pdf_bytes)
+
+        if not markdown_text or not markdown_text.strip():
+            return None, None, "Error: No text extracted from PDF", []
+
+        if progress_callback:
+            progress_callback(0.3, "Sending document to AI model...")
+
+        # Step 2: Send full document to model
+        summary_text, error = summarize_full_document(markdown_text, model_name, base_url)
+
+        if error:
+            return None, None, f"Error during summarization: {error}", [error]
+
+        if not summary_text:
+            return None, None, "Error: No summary generated", ["Empty response from model"]
+
+        if progress_callback:
+            progress_callback(0.9, "Rebuilding PDF from summary...")
+
+        # Step 3: Markdown → PDF
+        result_pdf = markdown_to_pdf(summary_text, pdf_bytes)
+
+        if progress_callback:
+            progress_callback(1.0, "Complete!")
+
+        return summary_text, result_pdf, "Summarized full document successfully", []
+
+    except Exception as e:
+        import traceback
+
+        error_detail = traceback.format_exc()
+        return None, None, f"Error processing PDF: {str(e)}", [error_detail]
+
+
 def text_to_pdf(text: str) -> bytes:
     """Convert plain text to PDF.
 
@@ -416,12 +503,106 @@ def anonymize_pdf(
     model_name: str,
     base_url: str,
     progress_callback: Optional[Callable[[float, str], None]] = None,
-) -> Tuple[Optional[bytes], str, List[str]]:
+) -> Tuple[Optional[bytes], Optional[str], Optional[str], str, List[str]]:
     """Anonymize PDF: extract to markdown, anonymize sentences, rebuild PDF.
 
-    Returns (pdf_bytes, summary_message, errors)
+    Returns (pdf_bytes, original_markdown, anonymized_markdown, summary_message, errors)
     """
-    _, pdf_bytes, status, errors = _process_pdf_pipeline(
+    original_md, anonymized_md, pdf_bytes, status, errors = _process_pdf_pipeline_with_text(
         pdf_file, model_name, base_url, "anonymize", progress_callback
     )
-    return pdf_bytes, status, errors
+    return pdf_bytes, original_md, anonymized_md, status, errors
+
+
+def _process_pdf_pipeline_with_text(
+    pdf_file,
+    model_name: str,
+    base_url: str,
+    task_type: str,
+    progress_callback: Optional[Callable[[float, str], None]] = None,
+) -> Tuple[Optional[str], Optional[str], Optional[bytes], str, List[str]]:
+    """Generic PDF processing pipeline that returns both original and processed text.
+
+    Pipeline:
+    1. PDF → Markdown (via docling)
+    2. Markdown → Sentences (via NLTK)
+    3. Process sentences (via KServe API)
+    4. Sentences → Markdown
+    5. Markdown → PDF (via reportlab)
+
+    Args:
+        pdf_file: PDF file object to process
+        model_name: Name of the model to call
+        base_url: Base URL of the KServe endpoint
+        task_type: Type of task (e.g., "anonymize", "summarize")
+        progress_callback: Optional callback for progress updates
+
+    Returns (original_markdown, processed_markdown, processed_pdf_bytes, status_message, errors)
+    """
+    try:
+        if progress_callback:
+            progress_callback(0.05, "Reading PDF...")
+
+        pdf_bytes = pdf_file.read()
+
+        if len(pdf_bytes) > 10 * 1024 * 1024:
+            return None, None, None, "Error: PDF file exceeds 10MB limit", []
+
+        if progress_callback:
+            progress_callback(0.1, "Converting PDF to markdown with docling...")
+
+        # Step 1: PDF → Markdown
+        markdown_text = pdf_to_markdown(pdf_bytes)
+
+        if not markdown_text or not markdown_text.strip():
+            return None, None, None, "Error: No text extracted from PDF", []
+
+        if progress_callback:
+            progress_callback(0.3, "Splitting into sentences...")
+
+        # Step 2: Markdown → Sentences (via NLTK)
+        sentences = split_into_sentences(markdown_text)
+
+        if not sentences:
+            return None, None, None, "Error: No sentences extracted from markdown", []
+
+        if progress_callback:
+            task_label = task_type.capitalize()
+            progress_callback(0.35, f"{task_label}ing {len(sentences)} sentences...")
+
+        # Step 3: Process sentences
+        def sentence_progress(pct):
+            if progress_callback:
+                task_label = task_type.capitalize()
+                progress_callback(
+                    0.35 + (pct * 0.5),
+                    f"{task_label}ing sentence {int(pct * len(sentences))}/{len(sentences)}...",
+                )
+
+        processed_sentences, errors = process_sentences(
+            sentences, model_name, base_url, task_type, sentence_progress
+        )
+
+        if progress_callback:
+            progress_callback(0.9, "Rebuilding PDF from processed text...")
+
+        # Step 4 & 5: Sentences → Markdown → PDF
+        processed_markdown = " ".join(processed_sentences)
+        result_pdf = markdown_to_pdf(processed_markdown, pdf_bytes)
+
+        if progress_callback:
+            progress_callback(1.0, "Complete!")
+
+        success_count = len(sentences) - len(errors)
+        task_label = task_type.capitalize() + "d"
+        status = f"{task_label} {success_count}/{len(sentences)} sentences"
+        if errors:
+            status += f" ({len(errors)} errors)"
+
+        return markdown_text, processed_markdown, result_pdf, status, errors
+
+    except Exception as e:
+        import traceback
+
+        error_detail = traceback.format_exc()
+        return None, None, None, f"Error processing PDF: {str(e)}", [error_detail]

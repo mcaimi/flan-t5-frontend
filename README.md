@@ -5,7 +5,9 @@ This repository contains a Streamlit application for interacting with a KServe-b
 ## Features
 
 - 🤖 Interactive web interface for FLAN-T5 model inference
-- 📄 **PDF Anonymization**: Upload PDFs, extract text with docling, split into sentences using NLTK, anonymize each sentence, and download anonymized PDF (default mode)
+- 📄 **PDF Anonymization**: Upload PDFs, extract text with docling, split into sentences using NLTK, anonymize each sentence, and download anonymized PDF with two modes:
+  - **Presidio Mode** (Local PII Masking): Privacy-preserving local PII detection and masking using Microsoft Presidio with **multi-language support** (English, Italian, Spanish, German)
+  - **KServe Mode** (AI Model): Context-aware anonymization using external AI model
 - 📝 **PDF Summarization**: Upload PDFs, extract text with docling, split into sentences using NLTK, summarize each sentence, and download as PDF or TXT
 - 🔒 **Text Anonymization** (optional): Single-sentence anonymization, translation, and summarization for quick text processing
 - 🔄 Support for individual or batch processing of all tasks
@@ -14,14 +16,17 @@ This repository contains a Streamlit application for interacting with a KServe-b
 - 🔍 Automatic model discovery from KServe endpoints
 - 💾 Response download capability (JSON and PDF)
 - 🧠 **NLTK-based sentence splitting** for improved sentence boundary detection
+- 🎨 **Unified diff display**: Red/green Git-style diff view showing before/after changes without truncation
 
 ## Files
 
 - `main_streamlit.py`: Main Streamlit application entry point
-- `config.yaml`: Feature flag configuration file
+- `config.yaml`: Feature flag and Presidio configuration file
 - `libs/apis.py`: API-related functions for KServe v2 inference endpoints
 - `libs/ui.py`: UI widget components for the Streamlit application
 - `libs/pdf_processor.py`: PDF processing module using docling for text extraction, NLTK for sentence splitting, and KServe API for anonymization and summarization
+- `libs/presidio.py`: Presidio integration for local PII detection and anonymization
+- `libs/diff_utils.py`: Unified diff generation with red/green highlighting for before/after comparisons
 - `pyproject.toml`: Project dependencies and metadata (UV-managed)
 
 ## Installation
@@ -43,13 +48,20 @@ The available features are controlled by the `config.yaml` file in the project r
 
 ## Configuration
 
-The application uses `config.yaml` to enable/disable features:
+The application uses `config.yaml` to enable/disable features and configure Presidio:
 
 ```yaml
 features:
   text_anonymization: false  # Enable sentence-level text anonymization tab
   pdf_anonymization: true    # Enable PDF document anonymization tab
   pdf_summarization: true    # Enable PDF document summarization tab
+
+presidio:
+  language: en                 # Language for PII detection: en, it, es, de
+  model_size: large            # Model size: small, medium, large
+  spacy_model: en_core_web_lg  # (Optional) Explicit spaCy model (overrides language + model_size)
+  gpu_enabled: auto            # GPU acceleration: auto, true, false
+  device: auto                 # Device selection: auto, cuda, cuda:0, mps, cpu
 ```
 
 ### Feature Flags
@@ -95,6 +107,133 @@ The application dynamically creates tabs based on enabled features. You can enab
    ```
    Displays a courtesy message: "There are no features enabled for this instance"
 
+### Multi-Language Support for Presidio
+
+Presidio now supports PII detection in multiple languages with configurable spaCy models:
+
+**Configuration options:**
+
+- **`language`**: Default language for PII detection
+  - `en` (English, default)
+  - `it` (Italian)
+  - `es` (Spanish)
+  - `de` (German)
+
+- **`model_size`**: spaCy model size (quality vs speed tradeoff)
+  - `small`: Fastest, ~25-30MB, ~70-80% accuracy
+  - `medium`: Balanced, ~40-50MB, ~85-90% accuracy
+  - `large` (default): Most accurate, ~100-560MB, ~90-95% accuracy
+
+- **`spacy_model`**: (Optional) Explicit spaCy model name
+  - If specified, overrides `language` and `model_size` settings
+  - Useful for backward compatibility or advanced configurations
+
+**Available spaCy models by language:**
+
+| Language | Small | Medium | Large |
+|----------|-------|--------|-------|
+| 🇬🇧 English | en_core_web_sm | en_core_web_md | en_core_web_lg |
+| 🇮🇹 Italian | it_core_news_sm | it_core_news_md | it_core_news_lg |
+| 🇪🇸 Spanish | es_core_news_sm | es_core_news_md | es_core_news_lg |
+| 🇩🇪 German | de_core_news_sm | de_core_news_md | de_core_news_lg |
+
+**Runtime language selection:**
+
+The PDF Anonymization interface (Presidio mode) provides dropdown selectors to choose:
+- **Language**: Select document language (English, Italian, Spanish, German)
+- **Model Size**: Choose quality vs speed tradeoff (Small/Fast, Medium/Balanced, Large/Accurate)
+
+Models are downloaded automatically on first use with progress feedback in the UI.
+
+### GPU Acceleration for Presidio
+
+Presidio supports GPU acceleration on both NVIDIA GPUs (CUDA) and Apple Silicon (MPS) for faster PII detection across all supported languages:
+
+**Configuration options:**
+
+- **`gpu_enabled`**: Controls GPU usage
+  - `auto` (default): Automatically use GPU if available, fallback to CPU
+  - `true`: Force GPU usage, show warning if not available
+  - `false`: Always use CPU even if GPU is available
+
+- **`device`**: Specific device to use
+  - `auto` (default): Auto-detect best device (CUDA > MPS > CPU)
+  - `cuda` or `cuda:0`: NVIDIA GPU (first GPU)
+  - `cuda:1`, `cuda:2`, etc.: Specific NVIDIA GPU (multi-GPU systems)
+  - `mps`: Apple Silicon GPU (M1/M2/M3/M4 Macs)
+  - `cpu`: CPU only
+
+**Performance expectations:**
+
+| Hardware | Speedup vs CPU | Best for |
+|----------|----------------|----------|
+| NVIDIA GPU | 2-3x (standard models)<br>5-10x (transformer models) | Large PDFs, transformer models (`en_core_web_trf`) |
+| Apple Silicon (MPS) | 1.5-2.5x (standard models)<br>3-5x (transformer models) | M1/M2/M3/M4 Macs with macOS 12.3+ |
+| CPU | Baseline | Small documents, development |
+
+**Requirements:**
+
+- **NVIDIA GPU**: CUDA-capable GPU with drivers installed (`nvidia-smi` works)
+- **Apple Silicon**: M1/M2/M3/M4 Mac with macOS 12.3 or later
+- PyTorch with CUDA/MPS support (already included in dependencies)
+
+**GPU memory usage:**
+
+| Model Size | NVIDIA GPU | Apple Silicon (MPS) |
+|------------|------------|---------------------|
+| Small (`*_sm`) | ~0.5GB | Shares unified memory |
+| Medium (`*_md`) | ~1.0GB | Shares unified memory |
+| Large (`*_lg`) | ~2.0GB | Shares unified memory |
+
+*Memory usage is similar across all supported languages (en/it/es/de)*
+
+**Recommended configurations:**
+
+```yaml
+# NVIDIA GPU system - English documents
+presidio:
+  language: en
+  model_size: large
+  gpu_enabled: auto
+  device: cuda:0
+
+# Apple Silicon Mac - Italian documents
+presidio:
+  language: it
+  model_size: medium  # Balanced for MPS
+  gpu_enabled: auto
+  device: mps
+
+# CPU-only - Spanish documents (e.g., cloud deployment without GPU)
+presidio:
+  language: es
+  model_size: small  # Faster on CPU
+  gpu_enabled: false
+  device: cpu
+
+# Multi-language with explicit model (backward compatibility)
+presidio:
+  spacy_model: de_core_news_lg  # German, large model
+  gpu_enabled: auto
+  device: auto
+```
+
+**Monitoring GPU usage:**
+
+The application displays device status in the sidebar under "🔧 Presidio Status":
+- NVIDIA GPU: Shows GPU name and memory usage
+- Apple Silicon: Shows "Apple Silicon GPU (MPS)"
+- CPU: Shows "Device: CPU"
+- Also displays: Current spaCy model and selected language
+
+**Error handling:**
+
+If GPU runs out of memory, the application automatically:
+1. Clears GPU cache
+2. Falls back to CPU
+3. Retries the operation
+4. Logs the fallback for debugging
+
 ## Application Interface
 
 The Streamlit application provides a comprehensive web interface with:
@@ -117,10 +256,20 @@ The Streamlit application provides a comprehensive web interface with:
 
 **PDF Anonymization Tab** (when `pdf_anonymization: true`):
 - PDF file upload (max 10MB)
+- Anonymization mode selector:
+  - **Presidio Mode**: Local privacy-preserving PII detection with:
+    - **Multi-language support**: English, Italian, Spanish, German
+    - **Language selector**: Choose document language with flag emojis (🇬🇧 🇮🇹 🇪🇸 🇩🇪)
+    - **Model size selector**: Balance quality vs speed (Small/Fast, Medium/Balanced, Large/Accurate)
+    - **Entity type configuration**: Select which PII types to detect (PERSON, EMAIL_ADDRESS, PHONE_NUMBER, etc.)
+    - **Auto-download models**: First-time model download with progress feedback
+  - **KServe Mode**: AI model-based context-aware anonymization
 - Automatic text extraction using docling
-- Intelligent sentence splitting using NLTK
-- Sentence-by-sentence anonymization via AI model
+- Intelligent sentence splitting using NLTK (KServe mode only)
+- Sentence-by-sentence anonymization via AI model (KServe mode) or full-text PII masking (Presidio mode)
 - Progress tracking with real-time status
+- **Unified diff view**: Red/green Git-style comparison showing all changes without truncation
+- PII detection summary table (Presidio mode only)
 - Download anonymized PDF
 - Error reporting for failed sentences
 
@@ -134,9 +283,11 @@ The Streamlit application provides a comprehensive web interface with:
 - Download summary as PDF or TXT format
 - Error reporting and detailed status messages
 
-## PDF Processing Pipeline
+## PDF Processing Pipelines
 
-Both PDF anonymization and summarization use a unified processing pipeline:
+### KServe Mode (AI Model) Pipeline
+
+For PDF anonymization and summarization using the AI model:
 
 1. **PDF → Markdown**: Extract text content using docling
 2. **Markdown → Sentences**: Split text into sentences using NLTK's punkt tokenizer
@@ -144,19 +295,45 @@ Both PDF anonymization and summarization use a unified processing pipeline:
 4. **Sentences → Markdown**: Rebuild the document from processed sentences
 5. **Markdown → PDF**: Convert back to PDF using reportlab
 
+### Presidio Mode (Local PII Masking) Pipeline
+
+For privacy-preserving local anonymization:
+
+1. **PDF → Markdown**: Extract text content using docling
+2. **Analyze Text**: Presidio analyzer detects PII entities (PERSON, EMAIL_ADDRESS, etc.) using spaCy NER
+3. **Anonymize Text**: Presidio anonymizer replaces detected entities with placeholders (e.g., `<PERSON>`, `<EMAIL_ADDRESS>`)
+4. **Markdown → PDF**: Convert anonymized text back to PDF using reportlab
+5. **Generate Diff**: Create unified red/green diff showing all changes
+
 ### Key Technologies
 
 - **docling**: High-quality PDF text extraction that preserves document structure
 - **NLTK**: Advanced sentence tokenization that handles edge cases (abbreviations, decimals, etc.) better than regex-based approaches
-- **KServe v2 API**: Scalable inference endpoint for processing individual sentences
+- **KServe v2 API**: Scalable inference endpoint for processing individual sentences (KServe mode)
+- **Presidio**: Microsoft's open-source PII detection and anonymization framework (Presidio mode)
+  - **presidio-analyzer**: Detects PII entities using spaCy NER models
+  - **presidio-anonymizer**: Masks detected entities with configurable operators
+- **spaCy**: Industrial-strength NLP for named entity recognition (powers Presidio)
 - **reportlab**: PDF generation from processed text
+- **difflib**: Python standard library for generating unified diffs with red/green highlighting
 
-### Benefits of Sentence-Level Processing
+### Benefits of Different Anonymization Modes
 
-- **Better quality**: Each sentence is processed independently for more accurate results
+**Presidio Mode (Local PII Masking)**:
+- **Privacy-preserving**: All processing happens locally, no data sent to external APIs
+- **Multi-language**: Supports English, Italian, Spanish, and German documents
+- **Fast**: No network latency, instant PII detection
+- **Configurable**: Choose which entity types to detect and mask, select model size for quality/speed tradeoff
+- **Transparent**: See exactly what was detected with entity type and confidence scores
+- **Deterministic**: Same input always produces the same output
+- **GPU accelerated**: Optional GPU support (NVIDIA CUDA, Apple Silicon MPS) for faster processing
+
+**KServe Mode (AI Model)**:
+- **Context-aware**: AI model understands context for more nuanced anonymization
+- **Sentence-level processing**: Each sentence processed independently for better quality
 - **Progress tracking**: Real-time feedback on which sentence is being processed
 - **Error resilience**: Failed sentences don't block the entire document
-- **Detailed reporting**: Know exactly which sentences succeeded or failed
+- **Flexible**: Can be fine-tuned for specific domains or use cases
 
 ## Runtime Configuration
 
@@ -179,7 +356,7 @@ The default behaviour can be also modified via environment variables: this is us
 
 - Python 3.13+
 - UV package manager
-- Access to a running KServe inference server with FLAN-T5 models
+- Access to a running KServe inference server with FLAN-T5 models (for KServe mode)
 - Dependencies:
   - streamlit>=1.56.0
   - requests>=2.33.1
@@ -187,6 +364,45 @@ The default behaviour can be also modified via environment variables: this is us
   - pypdf>=5.1.0 (for PDF manipulation)
   - reportlab>=4.2.0 (for PDF generation)
   - nltk>=3.8.0 (for sentence tokenization)
+  - presidio-analyzer>=2.2.354 (for local PII detection)
+  - presidio-anonymizer>=2.2.354 (for local PII masking)
+
+### First-Time Setup
+
+The application automatically downloads required models on first run:
+- **NLTK punkt tokenizer**: Downloaded automatically for sentence splitting
+- **spaCy language models**: Downloaded automatically for Presidio NER based on language selection
+
+**Configuration options:**
+
+```yaml
+# Recommended: Use language + model_size (automatically generates correct model)
+presidio:
+  language: en        # en, it, es, de
+  model_size: large   # small, medium, large
+
+# Alternative: Explicit model name (backward compatibility)
+presidio:
+  spacy_model: it_core_news_lg  # Explicit Italian large model
+```
+
+**Available spaCy models:**
+
+| Language | Small (~25-30MB) | Medium (~40-50MB) | Large (~100-560MB) |
+|----------|------------------|-------------------|---------------------|
+| English  | en_core_web_sm   | en_core_web_md    | en_core_web_lg      |
+| Italian  | it_core_news_sm  | it_core_news_md   | it_core_news_lg     |
+| Spanish  | es_core_news_sm  | es_core_news_md   | es_core_news_lg     |
+| German   | de_core_news_sm  | de_core_news_md   | de_core_news_lg     |
+
+**Model quality tradeoffs:**
+- **Small**: 2-3x faster, ~70-80% accuracy
+- **Medium**: Balanced, ~85-90% accuracy
+- **Large**: Most accurate, ~90-95% accuracy (default)
+
+**Runtime model selection:**
+
+Users can also select language and model size directly in the PDF Anonymization UI. Models are downloaded on-demand when first selected, with progress feedback shown in the interface.
 
 ## Building the image on Openshift using OCP BuildConfigs
 

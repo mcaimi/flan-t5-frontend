@@ -15,3 +15,59 @@ features:
   text_anonymization: false
   pdf_anonymization: true
   pdf_summarization: true
+
+# Presidio configuration for PII detection and anonymization
+#
+# language: Default language for PII detection
+#           Options: en (English), it (Italian), es (Spanish), de (German)
+#           Default: en
+#           Note: Changing language requires downloading the corresponding spaCy model
+#
+# model_size: Default spaCy model size
+#             Options: small (fastest, ~25-30MB, less accurate)
+#                      medium (balanced, ~40-50MB, good accuracy)
+#                      large (slowest, ~100-560MB, most accurate)
+#             Default: large (recommended for production)
+#
+# Available spaCy models by language:
+# - English: en_core_web_sm/md/lg/trf
+# - Italian: it_core_news_sm/md/lg
+# - Spanish: es_core_news_sm/md/lg
+# - German: de_core_news_sm/md/lg
+#
+# spacy_model: (Optional) Explicit spaCy model name - overrides language + model_size
+#              Options: en_core_web_sm/md/lg/trf, it_core_news_sm/md/lg, etc.
+#              If specified, this takes precedence over language and model_size settings
+#              Default: generated from language + model_size
+#
+# gpu_enabled: Enable GPU/accelerator support for faster processing
+#              Options: auto (auto-detect GPU), true (force GPU), false (force CPU)
+#              Default: auto
+#              - auto: Automatically use GPU if available (CUDA or MPS), fallback to CPU
+#              - true: Force GPU usage, show warning if not available
+#              - false: Always use CPU even if GPU is available
+#
+# device: Specific PyTorch device to use
+#         Options: auto, cuda, cuda:0, cuda:1, mps, cpu
+#         Default: auto
+#         - auto: Auto-detect best available device (CUDA > MPS > CPU)
+#         - cuda / cuda:0: NVIDIA GPU (first GPU)
+#         - cuda:1: NVIDIA GPU (second GPU, if available)
+#         - mps: Apple Silicon GPU (M1/M2/M3/M4 Macs with macOS 12.3+)
+#         - cpu: CPU only
+#
+# Performance notes:
+# - NVIDIA GPUs: 2-3x faster for large docs, 5-10x for transformer models
+# - Apple Silicon MPS: 1.5-2.5x faster for large docs, 3-5x for transformer models
+# - GPU acceleration most beneficial for large PDFs (20+ pages) and transformer models
+# - Model quality tradeoffs:
+#   * Small: 2-3x faster, ~70-80% accuracy
+#   * Medium: Balanced, ~85-90% accuracy
+#   * Large: Slowest, ~90-95% accuracy
+
+presidio:
+  language: en  # Default language: en, it, es, de
+  model_size: large  # Default model size: small, medium, large
+  spacy_model: en_core_web_lg  # Optional: explicit model (overrides language + model_size)
+  gpu_enabled: auto
+  device: auto
